@@ -1,6 +1,7 @@
 import cats.data.NonEmptyList
 import cats.effect._
 import cats.implicits._
+import ch.qos.logback.classic.pattern.LoggerConverter
 import fs2.io.file.Files
 import mx.cinvestav.commons.fileX.FileMetadata
 import org.http4s._
@@ -8,6 +9,8 @@ import org.http4s.blaze.client.BlazeClientBuilder
 import org.http4s.implicits._
 import org.http4s.multipart.{Multipart, Part}
 import org.typelevel.ci.CIString
+import org.typelevel.log4cats.{Logger, SelfAwareStructuredLogger}
+import org.typelevel.log4cats.slf4j.Slf4jLogger
 import org.typelevel.vault.Vault
 
 import java.io.File
@@ -21,6 +24,7 @@ import scala.language.postfixOps
 
 class UploadSpec extends munit .CatsEffectSuite {
   val resourceClient =  BlazeClientBuilder[IO](global).resource
+  implicit val unsafeLogger: SelfAwareStructuredLogger[IO] = Slf4jLogger.getLogger[IO]
   final val TARGET   = "/home/nacho/Programming/Scala/cache-node/target"
   final val SOURCE_FOLDER  = s"$TARGET/source"
   final val SINK_FOLDER  = s"$TARGET/sink"
@@ -63,6 +67,7 @@ class UploadSpec extends munit .CatsEffectSuite {
           Header.Raw(CIString("guid"),pdf0Id.toString),
           Header.Raw(CIString("filename"), FileMetadata.fromPath(pdf0File.toPath).fullname ),
           headers.`Content-Type`(MediaType.application.pdf),
+          headers.`Content-Length`(pdf0File.length())
         )
       ),
       Part.fileData("pdf1",pdf1File,
@@ -70,6 +75,7 @@ class UploadSpec extends munit .CatsEffectSuite {
           Header.Raw(CIString("guid"),pdf1Id.toString),
           Header.Raw(CIString("filename"), FileMetadata.fromPath(pdf1File.toPath).fullname ),
           headers.`Content-Type`(MediaType.application.pdf),
+          headers.`Content-Length`(pdf1File.length())
         )
       ),
       Part.fileData("pdf2",pdf2File,
@@ -77,6 +83,7 @@ class UploadSpec extends munit .CatsEffectSuite {
           Header.Raw(CIString("guid"),pdf2Id.toString),
           Header.Raw(CIString("filename"), FileMetadata.fromPath(pdf2File.toPath).fullname ),
           headers.`Content-Type`(MediaType.application.pdf),
+          headers.`Content-Length`(pdf2File.length())
         )
       ),
       Part.fileData("pdf3",pdf3File,
@@ -84,6 +91,7 @@ class UploadSpec extends munit .CatsEffectSuite {
         Header.Raw(CIString("guid"),pdf3Id.toString),
         Header.Raw(CIString("filename"), FileMetadata.fromPath(pdf3File.toPath).fullname ),
         headers.`Content-Type`(MediaType.application.pdf),
+        headers.`Content-Length`(pdf3File.length())
       )
     )
     )
@@ -116,36 +124,30 @@ class UploadSpec extends munit .CatsEffectSuite {
 
     resourceClient.use{ client => for {
       _                <- IO.println("UPLOADS")
-      trace           =NonEmptyList.of[Request[IO]](
-//      CACHE_SIZE = 1
-        uploadRequest(uri"""http://localhost:4000/upload""",pdf0,1),
-        uploadRequest(uri"""http://localhost:4001/upload""",pdf1,2),
-        downloadRequest(4000,pdf0Id),
-//        downloadRequest(4000,pdf0Id),
-//        downloadRequest(4000,pdf0Id),
-        downloadRequest(4001,pdf1Id),
-        uploadRequest(uri"""http://localhost:4002/upload""",pdf2,3),
-        uploadRequest(uri"""http://localhost:4000/upload""",pdf3,3),
-//        uploadRequest(uri"""http://localhost:4001/upload""",pdf2,3),
-//
-//        uploadRequest(uri"""http://localhost:4001/upload""",pdf2),
-//        downloadRequest(4001,pdf2Id),
-//        downloadRequest(4001,pdf2Id),
-//
-//        uploadRequest(uri"""http://localhost:4002/upload""",pdf3),
-//        downloadRequest(4002,pdf3Id),
-//
-//        uploadRequest(uri"""http://localhost:4000/upload""",pdf1),
-//        downloadRequest(4000,pdf1Id),
+      trace           =NonEmptyList.of[ (String,UUID,Request[IO])  ](
+        ("UPLOAD",pdf0Id,uploadRequest(uri"""http://localhost:4000/upload""",pdf0,1)),
+        ("DOWNLOAD",pdf0Id,downloadRequest(4000,pdf0Id)),
+        ("UPLOAD",pdf1Id,uploadRequest(uri"""http://localhost:4000/upload""",pdf1,2)),
+        ("DOWNLOAD",pdf1Id,downloadRequest(4000,pdf1Id)),
+        ("DOWNLOAD",pdf1Id,downloadRequest(4000,pdf1Id)),
+//        ("DOWNLOAD",pdf1Id,downloadRequest(4001,pdf1Id)),
+        ("UPLOAD",pdf2Id,uploadRequest(uri"""http://localhost:4000/upload""",pdf2,3)),
+//        ("DOWNLOAD",pdf2Id,downloadRequest(4002,pdf2Id)),
+//        ("DOWNLOAD",pdf2Id,downloadRequest(4002,pdf2Id)),
+//        ("UPLOAD",pdf3Id,uploadRequest(uri"""http://localhost:4000/upload""",pdf3,4)),
       )
       responses <- trace.zipWithIndex.traverse {
-        case (x, index) => for {
-          _ <- IO.println(s"REQUEST[$index]")
-//          res <- client.expect[String](req = x)
+        case ((operation,fileId,x), index) => for {
+          _        <- IO.unit
+          resultId = UUID.randomUUID()
+          _        <- IO.println(s"$operation RESULT_ID = $resultId FILE_ID = $fileId")
           res <- client.stream(x).flatMap{ response=>
             val body = response.body
-            val sinkPath = Paths.get(SINK_FOLDER+s"/${UUID.randomUUID()}")
-            body.through(Files[IO].writeAll(sinkPath))
+            if(operation !="UPLOAD"){
+              val sinkPath = Paths.get(SINK_FOLDER+s"/$resultId")
+              body.through(Files[IO].writeAll(sinkPath)) ++
+                fs2.Stream.eval(Logger[IO].info(s"$operation $fileId"))
+            }else fs2.Stream.eval(IO.unit)
           }.compile.drain
 //          _ <- IO.println(s"RESPONSE[$index] "+res)
           _ <- IO.sleep(2 seconds)

@@ -16,7 +16,7 @@ import mx.cinvestav.server.HttpServer.User
 import org.http4s.{AuthedRequest, Request}
 import org.typelevel.log4cats.Logger
 
-import java.io.File
+import java.io.{ByteArrayOutputStream, File}
 import java.util.UUID
 
 object Declarations {
@@ -27,6 +27,7 @@ object Declarations {
     final val REMOVE_NODE = "REMOVE_NODE"
     final val REPLICATE     = "REPLICATE"
     final val PULL     = "PULL"
+  final val PULL_DONE     = "PULL_DONE"
   //
     final val PROPOSE     = "PROPOSE"
     final val PREPARE     = "PREPARE"
@@ -61,13 +62,14 @@ object Declarations {
                        proposedElement: ProposedElement
                      )
 
-    case class PullDone(guid:String)
+    case class PullDone(guid:String,evictedItemPath:String,timestamp:Long)
     case class Pull(
                        guid:String,
                        url:String,
                        userId:String,
                        bucketName:String,
                        compressionAlgorithm:String,
+                       evictedItemPath:String,
                        timestamp:Long,
                      )
   }
@@ -115,12 +117,16 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                                authedRequest: AuthedRequest[IO,User]
                              )
   case class RequestX(operationId:Int,authedRequest: AuthedRequest[IO,User])
+  case class CacheNode(
+                        nodeId:String,
+                        ip:Option[String]=None,
+                        port:Option[Int]=None
+                      )
   case class NodeStateV5(
                           status:Status,
                           cacheNodes: List[String] = List.empty[String],
                           loadBalancer: balancer.LoadBalancer,
                           loadBalancerPublisher:PublisherV2,
-                          keyStore:PublisherV2,
                           cacheNodePubs:Map[String,PublisherV2],
                           syncNodePubs:Map[String,PublisherV2],
                           syncLB:Balancer[String],
@@ -130,12 +136,14 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           usedStorageSpace:Long,
                           replicationStrategy:String,
                           cache: MemoryCache[IO,String,Int],
+                          cachev2: MemoryCache[IO,String,ByteArrayOutputStream],
                           currentEntries:Ref[IO,List[String]],
                           cacheSize:Int,
                           downloadCounter:Int=0,
                           transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
                           queue:Queue[IO,RequestX],
                           currentOperationId:Option[Int],
-//                          status:
+                          //                          data:Map[]
+                          //                          status:
                       )
 }

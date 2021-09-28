@@ -71,7 +71,7 @@ object Routes {
            checksum         = ""
            ca               = compression.fromString(compressionAlgorithm)
            metadata         = ObjectMetadata(
-             guid =  guid,
+             guid =  guid.toString,
              size  = 0L,
              compression = ca.token,
              bucketName = "default",

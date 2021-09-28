@@ -15,7 +15,7 @@ object cache{
   }
   case class PutResponse(newCache:CacheX,evicted:Option[EvictedItem])
   case class EvictionResponse(newCache:CacheX,evictedItem: Option[EvictedItem])
-  case class ReadResponse(newCache:CacheX,found:Boolean)
+  case class ReadResponse(newCache:CacheX,value:Int,found:Boolean)
   case class WriteResponse(newCache:CacheX)
   sealed trait Policy {
     def putv2(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5):IO[PutResponse]
@@ -69,7 +69,7 @@ object cache{
     } yield x
 
     override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] = for {
-      _            <- ctx.logger.info(s"PUT $key")
+//      _            <- ctx.logger.info(s"PUT $key")
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
       cacheSize    = currentState.cacheSize
@@ -87,22 +87,24 @@ object cache{
     } yield response
 
     override def read(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[ReadResponse] = for {
-      _          <- ctx.logger.info(s"GET $key")
+//      _          <- ctx.logger.info(s"GET $key")
       maybeValue <- cache.lookup(key)
       value      <- maybeValue match {
         case Some(value) =>
           val newValue = value+1
-          newValue.pure[IO] <* ctx.logger.info(s"HIT $key $newValue")
+          newValue.pure[IO]
+//          <* ctx.logger.info(s"HIT $key $newValue")
         case None =>
-          0.pure[IO] <* ctx.logger.info(s"MISS $key")
+          0.pure[IO]
+//          <* ctx.logger.info(s"MISS $key")
       }
       _         <- if(value==0) IO.unit else cache.insert(key,value)
-      response = ReadResponse(newCache = cache,found= if(value==0) false else true)
+      response = ReadResponse(newCache = cache,value=value,found= if(value==0) false else true)
 //      response = if ( value ==0 )  ( cache,false) else (cache,true)
     } yield response
 
     override def putv2(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] =  for {
-      _            <- ctx.logger.info(s"PUT $key")
+//      _            <- ctx.logger.info(s"PUT $key")
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
       cacheSize    = currentState.cacheSize
@@ -167,31 +169,33 @@ object cache{
     override def eviction(cache: MemoryCache[IO, String, Int],remove:Boolean=false)(implicit ctx: NodeContextV5): IO[EvictionResponse] =  for {
       currentState       <- ctx.state.get
       elements           <- currentState.currentEntries.get
-      //    _                  <- IO.println(elements)
       maybeValues        <- elements.traverse(cache.lookup)
-        //      .flatTap(xs=>IO.println(xs.mkString(" // ")))
         .map(_.sequence)
       x                  <- maybeValues match {
         case Some(values) =>
           val sorted  = (elements zip values).sortBy(_._2)
-          val evicted = sorted.head
-          val evictedKey = evicted._1
+//          val evicted = sorted.head
+//          val evictedKey = evicted._1
+          val evicted = (EvictedItem.apply _) tupled sorted.head
           for {
-            _      <- cache.delete(evictedKey)
-            _      <- currentState.currentEntries.update(_.filter(_!=evictedKey))
-            result = (cache,Some(evictedKey))
+            _ <- IO.unit
+            removeAction = for {
+              _ <- cache.delete(evicted.key)
+              _ <- currentState.currentEntries.update(_.filter(_!=evicted.key))
+            } yield ()
+            _      <- if(remove) removeAction else IO.unit
+            result = (cache,Some(evicted))
           } yield result
         case None =>
-          (cache,Option.empty[String]).pure[IO]
+          (cache,Option.empty[EvictedItem]).pure[IO]
       }
-      response = EvictionResponse(newCache = x._1,evictedItem = None)
+      response = EvictionResponse(newCache = x._1,evictedItem =x._2)
     } yield response
 
     override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] = for {
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
       cacheSize    = currentState.cacheSize
-      //    _            <- IO.println(s"CACHE_SIZE $cacheSize / ${elements.length}")
       res          <- if(elements.length == cacheSize) for {
         evictionRes <- eviction(cache)
         writeRes  <- write(evictionRes.newCache,key)
@@ -211,13 +215,11 @@ object cache{
       value              <- maybeValue match {
         case Some(value) => for {
           newDownloadCounter <- ctx.state.updateAndGet(_.copy(downloadCounter = downloadCounter+1)).map(_.downloadCounter)
-          _ <- IO.println(s"FOUND $key $newDownloadCounter")
           _                  <- cache.insert(key,newDownloadCounter)
-        }  yield ReadResponse(newCache = cache,found = true)
+        }  yield ReadResponse(newCache = cache,value = newDownloadCounter,found = true)
+
         case None => for {
-          //        newDownloadCounter <- ctx.state.updateAndGet(_.copy(downloadCounter = downloadCounter+1)).map(_.downloadCounter)
-          //        _   <- cache.insert(key,newDownloadCounter)
-          res <-  ReadResponse(newCache = cache,found = false).pure[IO]
+          res <-  ReadResponse(newCache = cache,value = 0,found = false).pure[IO]
         } yield res
       }
 //      response = ReadResponse(newCache = cache,found = true)

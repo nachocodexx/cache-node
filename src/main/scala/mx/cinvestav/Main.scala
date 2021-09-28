@@ -22,7 +22,7 @@ import org.typelevel.log4cats.{Logger, SelfAwareStructuredLogger}
 import pureconfig.ConfigSource
 import pureconfig.generic.auto._
 
-import java.io.File
+import java.io.{ByteArrayOutputStream, File}
 import java.net.InetAddress
 import scala.language.postfixOps
 
@@ -53,18 +53,23 @@ object Main extends IOApp{
           lbExchangeName = ExchangeName(config.loadBalancer.exchange)
           lbRk           = RoutingKey(config.loadBalancer.routingKey)
           loadBalancerCfg = PublisherConfig(exchangeName = lbExchangeName,routingKey = lbRk )
-          //          KEY STORE
-          keyStoreExchange = ExchangeName(config.keyStore.exchange)
-          keyStoreRk       = RoutingKey(config.keyStore.routingKey)
-          keyStoreCfg      = PublisherConfig(exchangeName = keyStoreExchange ,routingKey = keyStoreRk)
           //         __________________________________________________________________________
           mr                    <- MapRef.ofConcurrentHashMap[IO,String,MemoryCacheItem[Int]](
             initialCapacity = 16,
             loadFactor = 0.75f,
             concurrencyLevel = 16
           )
+          mrv2                  <- MapRef.ofConcurrentHashMap[IO,String,MemoryCacheItem[ByteArrayOutputStream]](
+            initialCapacity = 16,
+            loadFactor = 0.75f,
+            concurrencyLevel = 16
+          )
           cache                 =  MemoryCache.ofMapRef[IO,String,Int](
             mr = mr,
+            defaultExpiration = None
+          )
+          cachev2               =  MemoryCache.ofMapRef[IO,String,ByteArrayOutputStream](
+            mr = mrv2,
             defaultExpiration = None
           )
           currentEntries  <- IO.ref(List.empty[String])
@@ -80,8 +85,9 @@ object Main extends IOApp{
             usedStorageSpace      = rootFile.getTotalSpace - rootFile.getFreeSpace,
             cacheNodePubs         = cacheNodePubs,
             loadBalancerPublisher = PublisherV2(loadBalancerCfg),
-            keyStore              = PublisherV2(keyStoreCfg),
+//            keyStore              = PublisherV2(keyStoreCfg),
             cache                 =  cache,
+            cachev2               = cachev2,
 //              newCache,
             currentEntries        =  currentEntries,
             cacheSize             = config.cacheSize,

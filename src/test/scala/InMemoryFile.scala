@@ -3,16 +3,34 @@ import cats.effect._
 import cats.effect.std.Queue
 import fs2.Stream
 import fs2.io.file.Files
+import io.circe.Decoder.Result
+import mx.cinvestav.config.{ChordGetResponse, ChordNode}
 
 import java.io.File
 import java.nio.file.Paths
 import concurrent.duration._
 import language.postfixOps
+import mx.cinvestav.Implicits._
 
 class InMemoryFile extends munit .CatsEffectSuite {
   final val TARGET   = "/home/nacho/Programming/Scala/cache-node/target"
   final val SOURCE_FOLDER  = s"$TARGET/source"
   final val SINK_FOLDER  = s"$TARGET/sink"
+//  val ch0 = ChordNode("ch-0","69.0.0.5",5600)
+  val ch0 = ChordNode("ch-0","localhost",5600)
+
+
+
+  test("Chord requests"){
+
+    ch0
+      .put("3f2b78af-138e-4e99-9709-eea9904625f0","HOLAAAAAAAAA!")
+      .flatMap{ data=>
+        IO.println(data)
+      }
+
+  }
+
   test("Compress"){
     import java.io.FileInputStream
     import java.io.FileOutputStream
@@ -54,7 +72,7 @@ class InMemoryFile extends munit .CatsEffectSuite {
     app
   }
   test("Basics"){
-    val path  = Paths.get(s"$TARGET/source/test.txt")
+    val path  = Paths.get(s"$TARGET/source/6.mkv")
     val bytesIO = Files[IO].readAll(path,8912).compile.to(Array)
 
     for {

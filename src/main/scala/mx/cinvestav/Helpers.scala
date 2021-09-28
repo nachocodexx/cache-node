@@ -1,8 +1,11 @@
 package mx.cinvestav
-import java.io.File
+import cats.effect.kernel.Outcome
+
+import java.io.{ByteArrayOutputStream, File}
 import java.net.URL
 import cats.implicits._
 import cats.effect.{IO, Ref}
+import com.github.gekomad.scalacompress.CompressionStats
 import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
 import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, AmqpProperties, ExchangeName, ExchangeType, RoutingKey}
 import fs2.io.file.Files
@@ -10,7 +13,7 @@ import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, N
 import mx.cinvestav.cache.cache.{CachePolicy, EvictedItem}
 import mx.cinvestav.commons.compression
 import mx.cinvestav.commons.fileX.FileMetadata
-import mx.cinvestav.commons.types.{Location, ObjectMetadata}
+import mx.cinvestav.commons.types.{Location, ObjectLocation, ObjectMetadata}
 import mx.cinvestav.server.HttpServer.User
 import mx.cinvestav.server.Routes.UploadResponse
 import mx.cinvestav.utils.v2.{PublisherConfig, PublisherV2, RabbitMQContext}
@@ -38,10 +41,16 @@ import cats.nio.file.{Files => NIOFIles}
 //
 import mx.cinvestav.commons.{status=>StatuX}
 import mx.cinvestav.utils.v2.encoders._
+import mx.cinvestav.commons.security.SecureX
+import at.favre.lib.bytes.Bytes
+import mx.cinvestav.commons.stopwatch.StopWatch._
 object Helpers {
 
-  def sendPull(userId:String,bucketName:String,evicted: EvictedItem,
-                 syncNodePub:PublisherV2
+  def sendPull(userId:String,
+               bucketName:String,
+               evictedKey: String,
+               syncNodePub:PublisherV2,
+               evictedItemPath:java.nio.file.Path,
                  )(implicit ctx:NodeContextV5) = for {
     timestamp    <- IO.realTime.map(_.toMillis)
     currentState <- ctx.state.get
@@ -50,15 +59,16 @@ object Helpers {
     ip         = currentState.ip
     port       = ctx.config.port
     nodeId     = ctx.config.nodeId
-    url        = s"http://$ip:$port/download/${evicted.key}"
+    url        = s"http://$ip:$port/download/${evictedKey}"
     //    syncNodes  = currentState.cacheNodePubs.filter(_._1==replyTo).values.toList
     msgPayload = Payloads.Pull(
-      guid      = evicted.key,
+      guid      = evictedKey,
       timestamp = timestamp,
       url =url,
       userId=userId,
       bucketName =bucketName,
-      compressionAlgorithm="lz4",
+      compressionAlgorithm="LZ4",
+      evictedItemPath = evictedItemPath.toString
     ).asJson.noSpaces
 
     properties  = AmqpProperties(
@@ -112,8 +122,11 @@ object Helpers {
   //        uploadUrl = s"http://$ip:$port/uploadv2"
 
   def onUp(operationId:Int,authReq: AuthedRequest[IO,User])(implicit ctx:NodeContextV5) = for {
+//    GET CURRENT SATE
     currentState         <- ctx.state.get
+//   GET CURRENT TIME
     timestamp            <- IO.realTime.map(_.toMillis)
+//
     nodeId               = ctx.config.nodeId
     poolId               = ctx.config.poolId
     port                 = ctx.config.port
@@ -147,13 +160,31 @@ object Helpers {
         _                <- IO.unit
         cache            = currentState.cache
         _                <- part.headers.headers.traverse(header=>ctx.logger.debug(s"HEADER $header"))
+//      HEADERS
         partHeaders      = part.headers
-        //         Metadata
-        guid             = partHeaders.get(key =ci"guid").map(_.head).map(_.value).map(UUID.fromString).getOrElse(UUID.randomUUID())
+        guid             = partHeaders.get(key =ci"guid").map(_.head).map(_.value)
+//          .map(UUID.fromString)
+          .getOrElse(UUID.randomUUID().toString)
         contentType      = partHeaders.get(ci"Content-Type").map(_.head.value).getOrElse( "application/octet-stream")
+        _ <- ctx.logger.debug("BEFORE_CHECKSUM")
+        contentLength    = partHeaders.get(ci"Content-Length").flatMap(_.head.value.toIntOption)
+//
         originalFilename = part.filename.getOrElse("default")
+        originalMetadata = FileMetadata.fromPath(Paths.get(originalFilename))
+        _                <- ctx.logger.debug(originalMetadata.toString)
         originalName     = part.name.getOrElse("default")
-        checksum         = ""
+        //
+        sinkPath         =  Paths.get(baseStr+s"/$guid")
+        stream           = part.body
+//        rawBytes         <- stream.compile.to(Array)
+
+        checksumInfoFiber         <- stream.through(fs2.hash.sha512)
+          .compile.to(Array)
+          .map(Bytes.from(_).encodeHex(false))
+          .stopwatch
+          .start
+        writeFile        = stream.through(Files[IO].writeAll(path=sinkPath)).compile.drain
+//
         metadata         = ObjectMetadata(
           guid =  guid,
           size  = 0L,
@@ -161,34 +192,36 @@ object Helpers {
           bucketName = bucketName,
           filename = originalFilename,
           name = originalName,
-          locations = Nil,
+          locations = ObjectLocation(
+            nodeId = nodeId,
+            poolId = poolId,
+            url = baseUrl+s"/download/$guid"
+          )::Nil,
           policies = Nil,
-          checksum = checksum,
+          checksum = "",
           userId = userId.toString,
           //              .getOrElse(UUID.randomUUID().toString),
           version = 1,
           timestamp = timestamp,
           contentType = contentType,
-          extension = ""
+          extension = originalMetadata.extension.value
         )
         //
-        sinkPath         =  Paths.get(baseStr+s"/$guid")
-        stream           = part.body
-        writeFile        = stream.through(Files[IO].writeAll(path=sinkPath)).compile.drain
-        //
-        _                <- ctx.logger.debug("GUID "+guid.toString)
         putRes           <- cacheX.putv2(cache,guid.toString)
         //      _____________________________________________________________________
         _                <- putRes.evicted match {
+//         CACHE IS FULL
           case Some(element) =>  for {
-            _             <- ctx.logger.debug("CONSENSUS_INIT")
-            _cacheNodes   = cacheNodes.filter(_._1!=nodeId)
-            cachePubs     = _cacheNodes.values.toList
-            _cacheNodeIds = _cacheNodes.keys.toList
+            _             <-  ctx.logger.debug("CONSENSUS_INIT")
+            _cacheNodes   =   cacheNodes.filter(_._1!=nodeId)
+            cachePubs     =  _cacheNodes.values.toList
+            _cacheNodeIds =  _cacheNodes.keys.toList
             _             <- ctx.logger.debug("CACHE_NODES "+_cacheNodeIds.mkString("//"))
+            chordNode     =  ctx.config.keyStore.nodes.head
+            putStatus     <- chordNode.put(guid,metadata.asJson.noSpaces)
+            _             <- ctx.logger.debug(s"PUT_STATUS $putStatus")
             //            Transaction
-            transactionId = guid.toString
-            //                UUID.randomUUID().toString
+            transactionId = guid
             transaction   = CacheTransaction(
               id = transactionId,
               cacheNodes =_cacheNodeIds,
@@ -227,21 +260,42 @@ object Helpers {
             _                               <- finalizer
 //            _          <- ctx.logger.debug("INIT PAXOS")
           } yield ()
+//         CACHE HAS EMPTY SLOTS
           case None => for {
-            _        <- ctx.logger.debug(s"NO EVICTION $ca")
-            _        <- writeFile
-            _        <- ctx.logger.debug(s"AFTER_WRITE")
-            _        <- compression.compress(ca=ca,source = sinkPath.toString,baseStr)
-              .value.flatMap {
+            checksum <- checksumInfoFiber.join.flatMap {
+              case Outcome.Succeeded(fa) => for {
+                value <- fa
+                _     <- ctx.logger.info(s"CHECKSUM $guid ${value.duration.toMillis}")
+              } yield value.result
+              case Outcome.Errored(e) => ctx.logger.error(e.getMessage) *> "NO_CHECKSUM".pure[IO]
+              case Outcome.Canceled() => ctx.logger.error("CANCELLED") *> "NO_CHECKSUM".pure[IO]
+            }
+
+//            buffer     = new ByteArrayOutputStream()
+//            rawBytes  <- stream.chunkN(8192).fold(buffer) { (buffer, chunk) =>
+//                buffer.write(chunk.toArray)
+//                buffer
+//            }.compile.lastOrError
+//            _ <- ctx.logger.debug(s"BUFFER ${buffer.size()}")
+//                .compile.to(Array)
+            _           <- writeFile
+            _           <- compression.compress(ca=ca,source = sinkPath.toString,baseStr).value.flatMap {
               case Left(e) => ctx.logger.error(e.getMessage)
               case Right(value) => for {
-                _        <- ctx.logger.debug(value.toString)
-                //                FREE NODE
-                _        <- ctx.state.update(_.copy(status=StatuX.Up,currentOperationId = None))
-                _        <- NIOFIles[IO].delete(sinkPath)
-                endTime  <- IO.realTime.map(_.toMillis)
-                duration = endTime-timestamp
-                _        <- ctx.logger.info(s"UPLOAD $guid $duration")
+                _           <- ctx.logger.debug(value.toString)
+                _ <- ctx.logger.info(s"COMPRESSION $guid ${value.sizeIn} ${value.sizeOut} ${value.millSeconds}")
+                newMetadata = metadata.copy(
+                  checksum=checksum,
+                  size = value.sizeOut
+                )
+                _ <- ctx.config.keyStore.nodes.head.put(guid.toString,newMetadata.asJson.noSpaces).start
+//                _ <- ctx.logger.debug(keyStoreStatus.toString)
+                _           <- ctx.logger.debug(newMetadata.asJson.toString)
+                _           <- ctx.state.update(_.copy(status=StatuX.Up,currentOperationId = None))
+                _           <- NIOFIles[IO].delete(sinkPath)
+                endTime     <- IO.realTime.map(_.toMillis)
+                duration    = endTime-timestamp
+                _           <- ctx.logger.info(s"UPLOAD $guid ${value.sizeOut} $duration")
               } yield ()
             }.onError{ t=> ctx.logger.error(t.getMessage)}
           } yield ()
@@ -302,7 +356,8 @@ object Helpers {
       Headers(
         Header.Raw(CIString("User-Id"),userId),
         Header.Raw(CIString("Bucket-Id"),bucketName),
-        Header.Raw(CIString("Compression-Algorithm"),"lz4")
+        Header.Raw(CIString("Compression-Algorithm"),"lz4"),
+        Header.Raw(CIString("File-Decompress"),"false")
       )
     )
     status <- client.status(req)
@@ -346,5 +401,21 @@ object Helpers {
       case ex: Throwable => Left(DownloadError(ex.getMessage))
     }
   }
+
+//  WRITE AND COMPRESS
+ def writeThenCompress(guid:String,
+                       ca:compression.CompressionAlgorithm,
+                       stream:Stream[IO,Byte],
+                       basePath:java.nio.file.Path,
+                       sinkPath:java.nio.file.Path)(implicit ctx:NodeContextV5): IO[CompressionStats] =
+   for {
+   _           <- stream.through(Files[IO].writeAll(sinkPath)).compile.drain
+   res           <- compression.compress(ca=ca,source = sinkPath.toString,basePath.toString).value.flatMap {
+     case Left(e) => ctx.logger.error(e.getMessage) *> IO.raiseError(e)
+     case Right(value) => for {
+       _  <- NIOFIles[IO].delete(sinkPath)
+     } yield value
+   }
+ }yield res
 
 }

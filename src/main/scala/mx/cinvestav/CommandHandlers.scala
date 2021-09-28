@@ -105,7 +105,7 @@ object CommandHandlers {
         ip           = currentState.ip
         port         = ctx.config.port
         storagePath  = ctx.config.storagePath
-        keystore     = currentState.keyStore
+//        keystore     = currentState.keyStore
         locations    = payload.locations
         guid         = payload.guid
 

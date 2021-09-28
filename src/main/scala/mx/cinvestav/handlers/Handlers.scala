@@ -21,9 +21,9 @@ object Handlers {
           implicit val acker: Acker = Acker(_acker)
           maybeCommandId match {
             case Some(commandId) => commandId match {
-              //              case AmqpFieldValue.StringVal(value) if value == CommandIds.PROPOSE => CommandHandlers.propose()
               case AmqpFieldValue.StringVal(value) if value == CommandIds.REPLICATE => ReplicateHandler()
               case AmqpFieldValue.StringVal(value) if value == CommandIds.PULL => PullHandler()
+              case AmqpFieldValue.StringVal(value) if value == CommandIds.PULL_DONE => PullDoneHandler()
               case AmqpFieldValue.StringVal(value) if value == CommandIds.PROPOSE => ProposeHandler()
               case AmqpFieldValue.StringVal(value) if value == CommandIds.PREPARE => PrepareHandler()
               case AmqpFieldValue.StringVal(value) if value == CommandIds.PROMISE => PromiseHandler()

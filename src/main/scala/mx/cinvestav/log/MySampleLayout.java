@@ -23,10 +23,11 @@ public class MySampleLayout extends LayoutBase<ILoggingEvent> {
             String message = event.getFormattedMessage();
 //            sbuf.append(elapsedTime);
 //            sbuf
-//                    .append(String.join(",",message.split(" ")))
-//                    .append(",")
+////                    .append(String.join(",",message.split(" ")))
+//                    .append(message)
+//                    .append(" ")
 //                    .append(nodeId)
-//                    .append(",")
+//                    .append(" ")
 //                    .append(elapsedTime)
 //                    .append(CoreConstants.LINE_SEPARATOR);
 

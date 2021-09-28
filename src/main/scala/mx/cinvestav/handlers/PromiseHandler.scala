@@ -3,22 +3,23 @@ package mx.cinvestav.handlers
 import cats.data.EitherT
 import cats.effect._
 import cats.implicits._
-import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
 import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpEnvelope, AmqpMessage, AmqpProperties}
 import fs2.io.file.Files
 import io.circe.{Encoder, Json}
 import io.circe.generic.auto._
 import io.circe.syntax._
 import mx.cinvestav.Declarations._
-import mx.cinvestav.cache.cache.{CachePolicy, CacheX, EvictedItem, EvictionResponse}
+import mx.cinvestav.cache.cache.{CachePolicy, CacheX, EvictedItem, EvictionResponse, PutResponse}
 import mx.cinvestav.commons.errors.{NoReplyTo, NodeError}
 import mx.cinvestav.commons.stopwatch.StopWatch._
+import mx.cinvestav.commons.compression
 import mx.cinvestav.utils.v2.encoders._
 import mx.cinvestav.utils.v2.{Acker, processMessageV2}
 import org.typelevel.log4cats.Logger
 
 import java.nio.file.Paths
 import cats.nio.file.{Files => NIOFIles}
+import com.github.gekomad.scalacompress.CompressionStats
 import mx.cinvestav.Helpers
 object PromiseHandler {
 
@@ -53,6 +54,7 @@ object PromiseHandler {
           storagePath         = ctx.config.storagePath
           replyTo             <- maybeReplyTo
           guid                = payload.guid
+//          ca                  = payload.
           latency             = timestamp - payload.timestamp
           _                   <- L.info(s"PROMISE_LATENCY ${payload.guid} $latency")
           transaction         <- EitherT.fromOption[IO].apply(currentState.transactions.get(payload.guid),TransactionNotFound(payload.guid))
@@ -67,72 +69,101 @@ object PromiseHandler {
               )
             }
           }
+          ca = newTransaction.compressionAlgorithm
 //          newTransaction         <- EitherT.fromOption[IO].apply(newCurrentState.transactions.get(guid),TransactionNotFound(payload.guid))
           _                    <- L.debug(newTransaction.asJson(encoder=cacheTransactionEncoder).toString)
           _ <- if(newTransaction.proposedElements.size < newTransaction.cacheNodes.length) unit
-          else for {
-            _ <- L.debug("ALL CACHE_NODES PROMISE VALUES")
-            userId          = newTransaction.userId
-            bucketName      = newTransaction.bucketName
-            filename        = newTransaction.filename
-            baseStr         =  s"$storagePath/$nodeId/$userId/$bucketName"
-            basePath        =  Paths.get(baseStr)
-            _               <- liftFF[Unit](NIOFIles[IO].createDirectories(basePath).void)
-            cache                   = newCurrentState.cache
-            cacheX                  = CachePolicy(ctx.config.cachePolicy)
-            firstProposedElem    = newTransaction.proposedElement
-            proposedElements     = newTransaction.proposedElements
-            emptySlots           = proposedElements.toList.filter(_._2.proposedElement.guid.isEmpty)
-            _ <- if(emptySlots.isEmpty) for {
-              _ <- L.debug("NO EMPTY SLOTS")
-              filteredProposedElem = proposedElements.toList
-                .filter(_._2.proposedElement.guid.nonEmpty)
-                .filter(_._2.proposedElement.hits < firstProposedElem .hits)
-                .minByOption(_._2.proposedElement.hits)
-              _ <- filteredProposedElem match {
-//              there's a lower element than the proposed
-                case Some( (cacheNode,value)) =>  for {
-                  _<- L.debug(s"SEND TO $cacheNode THE MIN PROPOSED ELEMENT $value")
+          else{
+            for {
+              _ <- L.debug("ALL CACHE_NODES PROMISE VALUES")
+              userId          = newTransaction.userId
+              bucketName      = newTransaction.bucketName
+              filename        = newTransaction.filename
+              baseStr         =  s"$storagePath/$nodeId/$userId/$bucketName"
+              basePath        =  Paths.get(baseStr)
+              _               <- liftFF[Unit](NIOFIles[IO].createDirectories(basePath).void)
+              cache                   = newCurrentState.cache
+              cacheX                  = CachePolicy(ctx.config.cachePolicy)
+              firstProposedElem    = newTransaction.proposedElement
+              proposedElements     = newTransaction.proposedElements
+              emptySlots           = proposedElements.toList.filter(_._2.proposedElement.guid.isEmpty)
+              //            xx = newTransaction.
+              _ <- if(emptySlots.isEmpty){
+                for {
+                  _ <- L.debug("NO EMPTY SLOTS")
+                  filteredProposedElem = proposedElements.toList
+                    .filter(_._2.proposedElement.guid.nonEmpty)
+                    .filter(_._2.proposedElement.hits < firstProposedElem .hits)
+                    .minByOption(_._2.proposedElement.hits)
+                  _ <- filteredProposedElem match {
+                    //              there's a lower element than the proposed
+                    case Some( (cacheNode,value)) =>  for {
+                      _<- L.debug(s"SEND TO $cacheNode THE MIN PROPOSED ELEMENT $value")
+                      _ <- liftFF[Unit](
+                        Helpers.uploadToNode(
+                          filename = filename,
+                          guid = guid,
+                          userId = userId.toString,
+                          bucketName = bucketName,
+                          url =  value.uploadUrl ,
+                          body = newTransaction.data
+                        )
+                      )
+
+                    } yield ()
+                    //              No of the proposed elements is lower
+                    case None =>  for {
+                      _            <- L.debug(s"SEND FIRST PROPOSED $firstProposedElem")
+                      localPath    = Paths.get(baseStr+"/"+firstProposedElem.guid+s".${ca.extension}")
+//                      localStream  = Files[IO].readAll(localPath,8192)
+                      syncNode     = currentState.syncLB.balance(rounds = 1).head
+                      syncNodePub  = currentState.syncNodePubs(syncNode)
+                      _            <- liftFF[Unit](
+                          Helpers.sendPull(
+                          userId=userId.toString,
+                          bucketName = bucketName,
+                          evictedKey =  firstProposedElem.guid,
+                          syncNodePub,
+                          evictedItemPath = localPath
+                        )
+                      )
+                      sinkPath         = Paths.get(baseStr,guid)
+//                      _        <- liftFF[Unit](newTransaction.data.through(Files[IO].writeAll(sinkPath)).compile.drain)
+                      cstats        <- liftFF[CompressionStats](Helpers.writeThenCompress(
+                        guid = newTransaction.id,
+                        ca  =ca ,
+                        stream = newTransaction.data,
+                        basePath = basePath,
+                        sinkPath = sinkPath
+                      ))
+                      _ <- L.debug(cstats.toString)
+                      putResponse <- liftFF[PutResponse]{
+                        cacheX.put(cache,key=newTransaction.id)
+                      }
+                      _        <- liftFF[Unit](ctx.state.update(s=>s.copy(cache= putResponse.newCache)))
+                    } yield ()
+                  }
+                } yield ()
+              }
+              //           There are empty slots in others cache nodes
+              else {
+                for {
+                  _ <- L.debug("THERE's a empty slots")
                   _ <- liftFF[Unit](
                     Helpers.uploadToNode(
                       filename = filename,
                       guid = guid,
                       userId = userId.toString,
                       bucketName = bucketName,
-                      url =  value.uploadUrl ,
+                      url =  emptySlots.head._2.uploadUrl ,
                       body = newTransaction.data
                     )
                   )
                 } yield ()
-//              No of the proposed elements is lower
-                case None =>  for {
-                  _        <- L.debug(s"SEND FIRST PROPOSED $firstProposedElem")
-                  sinkPath = Paths.get(baseStr,guid)
-                  _        <- liftFF[Unit](newTransaction.data.through(Files[IO].writeAll(sinkPath)).compile.drain)
-                  newCache <- liftFF[CacheX](cacheX.remove(cache,firstProposedElem.guid))
-                  _        <- liftFF[Unit](ctx.state.update(s=>s.copy(cache= newCache)))
-                } yield ()
               }
-            } yield ()
-//           There are empty slots in others cache nodes
-            else for {
-              _ <- L.debug("THERE's a empty slots")
-//              _ <- L.debug(emptySlots.asJson.toString)
-              _ <- liftFF[Unit](
-                Helpers.uploadToNode(
-                filename = filename,
-                guid = guid,
-                userId = userId.toString,
-                bucketName = bucketName,
-                url =  emptySlots.head._2.uploadUrl ,
-                body = newTransaction.data
-              )
-              )
-//              sinkPath    =  Paths.get(baseStr+s"/SOY_YO.pdf")
-//              _ <- liftFF[Unit](newTransaction.data.through(Files[IO].writeAll(sinkPath)).compile.drain)
-            } yield ()
 
-          } yield ()
+            } yield ()
+          }
 
 //          msgPayload          = Payloads.Accept(
 //              guid            = payload.guid,

@@ -2,16 +2,21 @@ package mx.cinvestav.handlers
 
 import cats.data.EitherT
 import cats.effect._
+import cats.nio.file.{Files => NIOFIles}
 import dev.profunktor.fs2rabbit.model.AmqpEnvelope
 import io.circe.generic.auto._
 import mx.cinvestav.Declarations._
 import mx.cinvestav.cache.cache.CachePolicy
+import mx.cinvestav.commons.compression
 import mx.cinvestav.commons.errors.{NoReplyTo, NodeError}
 import mx.cinvestav.commons.stopwatch.StopWatch._
+import mx.cinvestav.server.Client
 import mx.cinvestav.utils.v2.{Acker, processMessageV2}
 import org.typelevel.log4cats.Logger
 
-object ReplicateHandler {
+import java.nio.file.{Path, Paths}
+
+object PullDoneHandler {
   def apply()(implicit ctx:NodeContextV5,envelope: AmqpEnvelope[String],acker:Acker) = {
       type E                = NodeError
       val maybeCurrentState = EitherT.liftF[IO,E,NodeStateV5](ctx.state.get)
@@ -21,14 +26,18 @@ object ReplicateHandler {
       implicit val rabbitMQContext = ctx.rabbitMQContext
       val connection = rabbitMQContext.connection
       val client     = rabbitMQContext.client
-      def successCallback(payload: Payloads.Accept) = {
+      def successCallback(payload: Payloads.PullDone) = {
         val app = for {
-          timestamp           <- liftFF[Long](IO.realTime.map(_.toMillis))
-          currentState        <- maybeCurrentState
-          proposedElement     = payload.proposedElement
-          replyTo             <- maybeReplyTo
-          latency             = timestamp - payload.timestamp
-          _                   <- L.info(s"REPLICATE ${payload.guid} $latency")
+          timestamp       <- liftFF[Long](IO.realTime.map(_.toMillis))
+          currentState    <- maybeCurrentState
+//          replyTo         <- maybeReplyTo
+          latency         = timestamp - payload.timestamp
+          nodeId          = ctx.config.nodeId
+          storagePath     = ctx.config.storagePath
+          evictedPath     = Paths.get(payload.evictedItemPath)
+          _               <- liftFF[Unit](NIOFIles[IO].delete(evictedPath))
+//          _               <- liftFF[Path](NIOFIles[IO].createDirectories(basePath))
+          _               <- L.info(s"PULL_DONE_LATENCY ${payload.guid} $latency")
         } yield ()
 
         app.value.stopwatch.flatMap{ res =>
@@ -37,12 +46,12 @@ object ReplicateHandler {
             case Right(value) =>  for {
               _ <- acker.ack(envelope.deliveryTag)
               duration = res.duration.toMillis
-              _ <-  ctx.logger.debug(s"ACCEPT ${payload.guid} $duration")
+              _ <-  ctx.logger.debug(s"PULL_DONE ${payload.guid} $duration")
             } yield ()
           }
         }
       }
-      processMessageV2[IO,Payloads.Accept,NodeContextV5](
+      processMessageV2[IO,Payloads.PullDone,NodeContextV5](
         successCallback =  successCallback,
         errorCallback   = e=>ctx.logger.error(e.getMessage) *> acker.reject(envelope.deliveryTag)
       )

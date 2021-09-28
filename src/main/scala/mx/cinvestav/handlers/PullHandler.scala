@@ -1,9 +1,14 @@
 package mx.cinvestav.handlers
 
-import cats.data.EitherT
+import cats.implicits._
 import cats.effect._
-import dev.profunktor.fs2rabbit.model.AmqpEnvelope
+import cats.data.EitherT
+import cats.nio.file.{Files => NIOFIles}
+import mx.cinvestav.cache.cache.PutResponse
+//
+import dev.profunktor.fs2rabbit.model.{AmqpEnvelope, AmqpMessage, AmqpProperties}
 import io.circe.generic.auto._
+import io.circe.syntax._
 import mx.cinvestav.Declarations._
 import mx.cinvestav.Helpers
 import mx.cinvestav.cache.cache.CachePolicy
@@ -14,8 +19,9 @@ import mx.cinvestav.utils.v2.{Acker, processMessageV2}
 import org.typelevel.log4cats.Logger
 
 import java.nio.file.{Path, Paths}
-import cats.nio.file.{Files => NIOFIles}
+import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
 import mx.cinvestav.commons.compression
+import mx.cinvestav.utils.v2.encoders._
 
 object PullHandler {
   def apply()(implicit ctx:NodeContextV5,envelope: AmqpEnvelope[String],acker:Acker) = {
@@ -33,19 +39,44 @@ object PullHandler {
           currentState    <- maybeCurrentState
           cache           = currentState.cache
           cacheX          = CachePolicy(ctx.config.cachePolicy)
+          //
           replyTo         <- maybeReplyTo
+          replyToPub      = currentState.cacheNodePubs.get(replyTo)
+          replyToPub2     = currentState.syncNodePubs.get(replyTo)
+//
           latency         = timestamp - payload.timestamp
           nodeId          = ctx.config.nodeId
           storagePath     = ctx.config.storagePath
           userId          =  payload.userId
           bucketName      =  payload.bucketName
+          guid            = payload.guid
           baseStr         =  s"$storagePath/$nodeId/$userId/$bucketName"
           basePath        =  Paths.get(baseStr)
           _               <- liftFF[Path](NIOFIles[IO].createDirectories(basePath))
           _               <- L.info(s"PULL_LATENCY ${payload.guid} $latency")
           ca              = compression.fromString(payload.compressionAlgorithm)
-          sinkPath        = basePath.resolve(payload.guid+s"${ca.extension}")
-          _ <- liftFF[Unit](Client.downloadFileV3(userId,bucketName,payload.url,sinkPath))
+          sinkPath        = basePath.resolve(guid+s".${ca.extension}")
+          putResponse <- liftFF[PutResponse]{
+            cacheX.put(cache,guid)
+          }
+          _ <- liftFF[Unit](ctx.state.update(_.copy(
+            cache = putResponse.newCache
+          )))
+          _ <- putResponse.evicted match {
+            case Some(value) => for {
+              _ <- L.debug(s"SEND $value TO THE CLOUD")
+            } yield ()
+            case None =>  for {
+              _               <- liftFF[Unit](Client.downloadFileV3(userId,bucketName,payload.url,sinkPath))
+              //        SEND DONE
+              publisher       = replyToPub orElse replyToPub2
+              pullDonePayload = Payloads.PullDone(guid=payload.guid,evictedItemPath = payload.evictedItemPath,timestamp=timestamp)
+              properties      = AmqpProperties(headers = Map("commandId"->StringVal(CommandIds.PULL_DONE)))
+              message         = AmqpMessage[String](payload=pullDonePayload.asJson.noSpaces,properties = properties)
+              x               <- liftFF[Option[Unit]](publisher.traverse(_.publish(message)))
+            } yield ()
+          }
+//        DOWNLOAD
         } yield ()
 
         app.value.stopwatch.flatMap{ res =>

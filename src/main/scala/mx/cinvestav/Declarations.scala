@@ -4,6 +4,13 @@ import cats.data.EitherT
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref}
 import io.chrisdavenport.mules.MemoryCache
+import mx.cinvestav.cache.CacheX.CacheItem
+//
+import io.circe._
+import io.circe.generic.auto._
+import io.circe.syntax._
+//
+import mx.cinvestav.cache.CacheX.ICache
 import mx.cinvestav.commons.balancer
 import mx.cinvestav.commons.balancer.v2.Balancer
 import mx.cinvestav.commons.errors.NodeError
@@ -12,7 +19,6 @@ import mx.cinvestav.commons.status.Status
 import mx.cinvestav.config.DefaultConfigV5
 import mx.cinvestav.utils.v2.{PublisherV2, RabbitMQContext}
 import mx.cinvestav.commons.compression
-import mx.cinvestav.server.HttpServer.User
 import org.http4s.{AuthedRequest, Request}
 import org.typelevel.log4cats.Logger
 
@@ -20,6 +26,25 @@ import java.io.{ByteArrayOutputStream, File}
 import java.util.UUID
 
 object Declarations {
+//
+  case class ObjectX(guid:String,bytes:Array[Byte],metadata:Map[String,String])
+  case class ObjectS(guid:String,
+                     bytes: Array[Byte],
+//                     fs2.Stream[IO,Byte],
+//                     bytes:fs2.Stream[IO,ByteArrayOutputStream],
+                     metadata:Map[String,String]
+                    )
+  //
+  implicit val objectSEncoder: (String)=>Encoder[CacheItem[ObjectS]] = policy =>new Encoder[CacheItem[ObjectS]] {
+    override def apply(a: CacheItem[ObjectS]): Json = Json.obj(
+      ("guid"->a.value.guid.asJson),
+        if(policy=="LFU") ("hits"->a.counter.asJson) else ("sequence_number"->a.counter.asJson),
+          ("metadata"->a.value.metadata.asJson)
+    )
+  }
+//
+  case class User(id:UUID,bucketName:String)
+//
   def liftFF[A]: IO[A] => EitherT[IO, NodeError, A] =  commons.liftFF[A,NodeError]
 //
   object CommandIds {
@@ -123,27 +148,30 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                         port:Option[Int]=None
                       )
   case class NodeStateV5(
+                          levelId:String,
                           status:Status,
                           cacheNodes: List[String] = List.empty[String],
-                          loadBalancer: balancer.LoadBalancer,
-                          loadBalancerPublisher:PublisherV2,
+//                          loadBalancer: balancer.LoadBalancer,
+                          loadBalancerPublisherZero:PublisherV2,
+                          loadBalancerPublisherOne:PublisherV2,
                           cacheNodePubs:Map[String,PublisherV2],
                           syncNodePubs:Map[String,PublisherV2],
                           syncLB:Balancer[String],
                           ip:String = "127.0.0.1",
                           availableResources:Int,
-                          freeStorageSpace:Long,
+//
+                          totalStorageSpace:Long=1000000000,
+//                          freeStorageSpace:Long,
                           usedStorageSpace:Long,
-                          replicationStrategy:String,
+                          availableStorageSpace:Long,
+//                          replicationStrategy:String,
                           cache: MemoryCache[IO,String,Int],
-                          cachev2: MemoryCache[IO,String,ByteArrayOutputStream],
                           currentEntries:Ref[IO,List[String]],
                           cacheSize:Int,
                           downloadCounter:Int=0,
                           transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
                           queue:Queue[IO,RequestX],
                           currentOperationId:Option[Int],
-                          //                          data:Map[]
-                          //                          status:
+                          cacheX:ICache[IO,ObjectS]
                       )
 }

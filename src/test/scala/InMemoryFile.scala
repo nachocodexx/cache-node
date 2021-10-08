@@ -1,9 +1,11 @@
+import cats.data.Chain
 import cats.implicits._
 import cats.effect._
 import cats.effect.std.Queue
 import fs2.Stream
 import fs2.io.file.Files
 import io.circe.Decoder.Result
+import mx.cinvestav.Declarations.ObjectX
 import mx.cinvestav.config.{ChordGetResponse, ChordNode}
 
 import java.io.File
@@ -11,6 +13,8 @@ import java.nio.file.Paths
 import concurrent.duration._
 import language.postfixOps
 import mx.cinvestav.Implicits._
+import mx.cinvestav.cache.CacheX.{CacheResponse, LFU, LRU}
+import mx.cinvestav.cache.cache.PutResponse
 
 class InMemoryFile extends munit .CatsEffectSuite {
   final val TARGET   = "/home/nacho/Programming/Scala/cache-node/target"
@@ -22,12 +26,25 @@ class InMemoryFile extends munit .CatsEffectSuite {
 
 
   test("Chord requests"){
-
-    ch0
-      .put("3f2b78af-138e-4e99-9709-eea9904625f0","HOLAAAAAAAAA!")
-      .flatMap{ data=>
-        IO.println(data)
-      }
+    val lru = LRU[IO,ObjectX](2)
+    val o1 = ObjectX("UNO",Array.emptyByteArray,Map.empty[String,String])
+    val o2 = ObjectX("DOS",Array.emptyByteArray,Map.empty[String,String])
+    val o3 = ObjectX("TRES",Array.emptyByteArray,Map.empty[String,String])
+    for {
+      _    <- IO.println("INIT")
+      printx = (x:CacheResponse) => IO.delay{println(x);println("______________________")}
+      put0 <- lru.put("UNOO",o1)
+      _    <- lru.get("UNOO")
+      _    <- lru.get("UNOO")
+      _    <- printx(put0)
+      put1 <- lru.put("DOOS",o2)
+      _    <- lru.get("DOOS")
+      _    <- printx(put1)
+      put2 <- lru.put("TRESS",o3)
+      get2 <- lru.get("TRESS")
+      _    <- printx(put2)
+      _    <- printx(get2)
+    } yield ()
 
   }
 

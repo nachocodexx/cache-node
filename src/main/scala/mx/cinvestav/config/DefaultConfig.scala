@@ -49,15 +49,20 @@ case class KeyStoreInfo(
                          nodes:List[ChordNode]
                        )
 
+
 case class LoadBalancerInfo(
-                           strategy:String,
-                           exchange:String,
-                           routingKey:String
-                           )
+                                exchange:String,
+                                routingKey:String,
+                                ip:String,
+                                port:Int
+                           ){
+  def httpURL = s"http://$ip:$port"
+}
+case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:LoadBalancerInfo)
 
 case class DefaultConfigV5(
                             nodeId:String,
-                            loadBalancer:LoadBalancerInfo,
+                            loadBalancer:LoadBalancerLevel,
                             replicationFactor:Int,
                             poolId:String,
                             storagePath:String,
@@ -67,7 +72,8 @@ case class DefaultConfigV5(
                             rabbitmq: RabbitMQClusterConfig,
                             port:Int,
                             host:String,
-                            replicationStrategy:String,
+                            //                            replicationStrategy:String,
+                            totalStorageSpace:Long,
                             keyStore:KeyStoreInfo,
                             syncNodes:List[String],
                             clouds:List[String],

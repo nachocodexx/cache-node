@@ -1,6 +1,7 @@
 package mx.cinvestav.server
 
 import fs2.io.file.Files
+import mx.cinvestav.Declarations
 import mx.cinvestav.commons.types.ObjectLocation
 //
 import cats.implicits._
@@ -10,7 +11,7 @@ import cats.nio.file.{Files => NIOFiles}
 //
 import java.nio.file.Paths
 //
-import mx.cinvestav.Declarations.NodeContextV5
+import mx.cinvestav.Declarations.{NodeContextV5,User}
 import mx.cinvestav.cache.cache.CachePolicy
 import mx.cinvestav.commons.compression
 import mx.cinvestav.commons.types.ObjectMetadata
@@ -43,7 +44,6 @@ import org.http4s._
 
 object HttpServer {
 
-  case class User(id:UUID,bucketName:String)
 
 
 //  def UploadOnUp(operationId:Int,req:Request[IO],user: User)(implicit ctx:NodeContextV5) = for {
@@ -196,7 +196,7 @@ object HttpServer {
     Kleisli{ req=> for {
       _          <- OptionT.liftF(ctx.logger.debug("AUTH MIDDLEWARE"))
       headers    = req.headers
-      _          <- OptionT.liftF(ctx.logger.debug(headers.headers.mkString(" // ")))
+//      _          <- OptionT.liftF(ctx.logger.debug(headers.headers.mkString(" // ")))
       maybeUserId     = headers.get(ci"User-Id").map(_.head).map(_.value)
       maybeBucketName = headers.get(ci"Bucket-Id").map(_.head).map(_.value)
       _          <- OptionT.liftF(ctx.logger.debug(maybeUserId.toString+"//"+maybeBucketName.toString))
@@ -212,10 +212,11 @@ object HttpServer {
 
       } yield ress
     }
+
   def authMiddleware(implicit ctx:NodeContextV5):AuthMiddleware[IO,User] =
     AuthMiddleware(authUser=authUser)
 
-  def authRoutes()(implicit ctx:NodeContextV5):AuthedRoutes[User,IO]  = AuthedRoutes.of{
+  def authRoutes()(implicit ctx:NodeContextV5):AuthedRoutes[User,IO]  = AuthedRoutes.of[User,IO]{
     case req@GET -> Root as user => for {
       _   <- ctx.logger.debug(user.toString)
       res <- Ok("TOP SECRET")
@@ -363,8 +364,6 @@ object HttpServer {
         _           <- Helpers.onUp(operationId,authReq)
       response      <- Ok("HERE!")
     } yield response
-
-
     case authReq@POST -> Root / "uploadv2" as user => for {
       _ <- ctx.logger.debug("INIT_UPLOAD_v2")
       timestamp            <- IO.realTime.map(_.toMillis)
@@ -461,24 +460,14 @@ object HttpServer {
       response  <- Ok("RESPONSE")
     } yield response
 
-
   }
 
   private def httpApp()(implicit ctx:NodeContextV5): Kleisli[IO, Request[IO],
     Response[IO]] =
     Router[IO](
-//      "/" -> Routes(),
       "/" ->  authMiddleware(ctx=ctx)(authRoutes()),
-      "/stats" -> HttpRoutes.of[IO]{
-        case req@GET -> Root / "v2" => for {
-          _        <- ctx.logger.debug("HEREEE!")
-          background = for {
-            _ <-  ctx.logger.debug("AQUI!")
-            _ <- Helpers.sendRequest(req)
-          } yield ()
-          _ <- (IO.sleep(2 seconds) *> background).start
-          response <- Ok("RESPONSE")
-        } yield response
+      "/api/v6" -> authMiddleware(ctx=ctx)(RouteV6()),
+      "/api/v6/stats" -> HttpRoutes.of[IO]{
         case req@GET -> Root => for {
           currentState <- ctx.state.get
           timestamp    <- IO.realTime.map(_.toMillis)
@@ -486,17 +475,22 @@ object HttpServer {
           poolId       = ctx.config.poolId
           ip           = currentState.ip
           port         = ctx.config.port
-          keys         <- currentState.currentEntries.get
-          values       <- keys.traverse(key=>
-            currentState.cache.lookup(key).map(v=>(key,v.getOrElse(0)))
-          ).map(_.toMap)
+          cacheSize    = ctx.config.cacheSize
+          cachePolicy  = ctx.config.cachePolicy
+          cache        = currentState.cacheX
+          da           <- cache.getAll.map(_.map(_.item.get))
           data         = Map(
             "NODE_ID"->nodeId.asJson,
             "POOL_ID"->poolId.asJson,
             "IP_ADDRESS"->ip.asJson,
             "NODE_PORT" -> port.asJson,
-            "DATA" -> values.asJson,
-            "TIMESTAMP" -> timestamp.asJson
+            "DATA" ->  da.map(x=>x.asJson(Declarations.objectSEncoder(ctx.config.cachePolicy))).asJson,
+            "CACHE_POLICY" -> cachePolicy.asJson,
+            "CACHE_SIZE" -> cacheSize.asJson,
+            "TIMESTAMP" -> timestamp.asJson,
+            "TOTAL_STORAGE_SPACE" -> ctx.config.totalStorageSpace.asJson,
+            "AVAILABLE_STORAGE_SPACE" -> currentState.availableStorageSpace.asJson,
+            "USED_STORAGE_SPACE" -> currentState.usedStorageSpace.asJson
           )
           response     <- Ok(data.asJson)
         } yield (response)

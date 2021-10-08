@@ -8,13 +8,15 @@ import cats.effect.{IO, Ref}
 import com.github.gekomad.scalacompress.CompressionStats
 import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
 import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, AmqpProperties, ExchangeName, ExchangeType, RoutingKey}
+import fs2.Pipe
 import fs2.io.file.Files
-import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, NodeContextV5, Payloads, ProposedElement, StorageNode, liftFF}
+import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, NodeContextV5, ObjectS, Payloads, ProposedElement, StorageNode, User, liftFF}
 import mx.cinvestav.cache.cache.{CachePolicy, EvictedItem}
+import mx.cinvestav.cache.CacheX.{EvictedItem => EvictedItemV2}
 import mx.cinvestav.commons.compression
 import mx.cinvestav.commons.fileX.FileMetadata
 import mx.cinvestav.commons.types.{Location, ObjectLocation, ObjectMetadata}
-import mx.cinvestav.server.HttpServer.User
+//import mx.cinvestav.server.HttpServer.User
 import mx.cinvestav.server.Routes.UploadResponse
 import mx.cinvestav.utils.v2.{PublisherConfig, PublisherV2, RabbitMQContext}
 import org.http4s.Request
@@ -45,6 +47,69 @@ import mx.cinvestav.commons.security.SecureX
 import at.favre.lib.bytes.Bytes
 import mx.cinvestav.commons.stopwatch.StopWatch._
 object Helpers {
+
+//  Update storage capacity cache
+  def updateStorage(evictedItem: EvictedItemV2[ObjectS],level1ObjectSize:Long)(implicit ctx:NodeContextV5 ): IO[Unit] = {
+    for {
+      _                      <-ctx.state.update( s=>{
+        val evictedItemSize = evictedItem.value.metadata.getOrElse("objectSize","0").toLong
+        s.copy(
+          usedStorageSpace = (s.usedStorageSpace - evictedItemSize) + level1ObjectSize,
+          availableStorageSpace = (s.availableStorageSpace +evictedItemSize) - level1ObjectSize
+        )
+      }
+      )
+    } yield ()
+  }
+  //
+  def streamBytesToBuffer:Pipe[IO,Byte,ByteArrayOutputStream] = s0 =>
+    fs2.Stream.suspend{
+      s0.chunks.fold(new ByteArrayOutputStream(1000)){ (buffer,chunk)=>
+        val bytes = chunk.toArraySlice
+        buffer.write(bytes.values,bytes.offset,bytes.size)
+        buffer
+      }
+    }
+
+
+  def evictedItemRedirectTo(req:Request[IO],oneURL:String,evictedElem:EvictedItemV2[ObjectS],user: User)(implicit ctx:NodeContextV5): IO[Response[IO]] = for {
+    _ <- IO.unit
+    body   = fs2.Stream.emits(evictedElem.value.bytes).covary[IO]
+//    body     = buffer.flatMap(buffer=>Stream.emits(buffer.toByteArray))
+//    bodyLen  <- buffer.map(_.size()).compile.last
+//    _ <- ctx.logger.debug(s"EVICTED_ITEM_BYTES $bodyLen")
+    multipart = Multipart[IO](
+      parts = Vector(
+        Part[IO](
+          headers =  Headers(
+            Header.Raw(CIString("guid"),evictedElem.key),
+            Header.Raw(org.http4s.headers.`Content-Length`.name,evictedElem.value.metadata.getOrElse("objectSize", "0"))
+          ),
+          body = body
+        )
+      )
+    )
+    newUri    = Uri.unsafeFromString(oneURL).withPath(req.uri.path)
+    //            REQUEST
+    newReq    = Request[IO](
+      method  = org.http4s.Method.POST,
+      uri     = newUri,
+      headers = multipart.headers,
+      httpVersion = req.httpVersion
+    ).withEntity(multipart).putHeaders(Headers(
+      Header.Raw(CIString("User-Id"),user.id.toString),
+      Header.Raw(CIString("Bucket-Id"),user.bucketName),
+    ))
+    levelOneResponse        <- Helpers.redirectTo(oneURL,newReq)
+
+  } yield levelOneResponse
+  def redirectTo(nodeUrl:String,req:Request[IO]): IO[Response[IO]] = for {
+    _                   <- IO.unit
+    newReq             = req.withUri(Uri.unsafeFromString(nodeUrl).withPath(req.uri.path))
+    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
+    response           <- client.toHttpApp.run(newReq)
+    _ <- finalizer
+  } yield response
 
   def sendPull(userId:String,
                bucketName:String,
@@ -89,7 +154,7 @@ object Helpers {
   def sendPromise(nodeId:String,
                   payload: Payloads.Prepare,
 //                  uploadUrl:String,
-                  evicted: EvictedItem,
+                  evicted:EvictedItem,
                   replyTo:String
                  )(implicit ctx:NodeContextV5) = for {
     timestamp    <- IO.realTime.map(_.toMillis)
@@ -366,26 +431,26 @@ object Helpers {
   } yield ()
 
   //  ________________________________________________________________________________
-  def replicationCompleted(taskId:String,chunkId:String,location:Location)(implicit ctx:NodeContextV5) = for {
-
-    currentState <- ctx.state.get
-    lb           = currentState.loadBalancerPublisher
-    timestamp    <- IO.realTime.map(_.toMillis)
-    nodeId       = ctx.config.nodeId
-    properties   = AmqpProperties(headers = Map("commandId" -> StringVal("REPLICATION_COMPLETED") ))
-
-    msgPayload = PAYLOADS.ReplicationCompleted(
-      replicationTaskId = taskId,
-      storageNodeId     = nodeId,
-      chunkId           = chunkId,
-      //        uploadFileOutput.metadata.filename.value,
-      timestamp         = timestamp,
-      location          = location
-      //        Location(url=url,source =source.toString)
-    ).asJson.noSpaces
-    msg      = AmqpMessage[String](payload = msgPayload,properties = properties)
-    _ <- lb.publish(msg)
-  } yield ()
+//  def replicationCompleted(taskId:String,chunkId:String,location:Location)(implicit ctx:NodeContextV5) = for {
+//
+//    currentState <- ctx.state.get
+//    lb           = currentState.loadBalancerPublisher
+//    timestamp    <- IO.realTime.map(_.toMillis)
+//    nodeId       = ctx.config.nodeId
+//    properties   = AmqpProperties(headers = Map("commandId" -> StringVal("REPLICATION_COMPLETED") ))
+//
+//    msgPayload = PAYLOADS.ReplicationCompleted(
+//      replicationTaskId = taskId,
+//      storageNodeId     = nodeId,
+//      chunkId           = chunkId,
+//      //        uploadFileOutput.metadata.filename.value,
+//      timestamp         = timestamp,
+//      location          = location
+//      //        Location(url=url,source =source.toString)
+//    ).asJson.noSpaces
+//    msg      = AmqpMessage[String](payload = msgPayload,properties = properties)
+//    _ <- lb.publish(msg)
+//  } yield ()
 
   def fromStorageNodeToPublisher(x:StorageNode)(implicit rabbitMQContext:RabbitMQContext): PublisherV2 = {
     val exchange = ExchangeName(x.poolId)

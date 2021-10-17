@@ -3,8 +3,12 @@ package mx.cinvestav
 import cats.data.EitherT
 import cats.effect.std.Queue
 import cats.effect.{IO, Ref}
+import com.dropbox.core.v2.DbxClientV2
 import io.chrisdavenport.mules.MemoryCache
+import mx.cinvestav.commons.events.{Del, Push, Pull => PullEvent}
+//import mx.cinvestav.Declarations.{EventX, Get, Put}
 import mx.cinvestav.cache.CacheX.CacheItem
+import mx.cinvestav.commons.events.{EventX, Get, Put}
 //
 import io.circe._
 import io.circe.generic.auto._
@@ -27,6 +31,16 @@ import java.util.UUID
 
 object Declarations {
 //
+  object Implicits {
+    implicit val eventXEncoder: Encoder[EventX] = {
+      case get:Get => get.asJson
+      case put:Put => put.asJson
+      case del:Del => del.asJson
+      case pull:PullEvent => pull.asJson
+      case push:Push => push.asJson
+      case _ => Json.Null
+    }
+  }
   case class ObjectX(guid:String,bytes:Array[Byte],metadata:Map[String,String])
   case class ObjectS(guid:String,
                      bytes: Array[Byte],
@@ -114,6 +128,12 @@ object Declarations {
 case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
 //
 //  case class RabbitContext(client:RabbitClient[IO],connection:AMQPConnection)
+
+  case class NodeContextV6(
+                            config: DefaultConfigV5,
+                            logger: Logger[IO],
+                            state:Ref[IO,NodeStateV6],
+                          )
   case class NodeContextV5(
                             config: DefaultConfigV5,
                             logger: Logger[IO],
@@ -147,6 +167,25 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                         ip:Option[String]=None,
                         port:Option[Int]=None
                       )
+
+  case class NodeStateV6(
+                          levelId:String,
+                          status:Status,
+                          cacheNodes: List[String] = List.empty[String],
+                          ip:String = "127.0.0.1",
+                          availableResources:Int,
+                          totalStorageSpace:Long=1000000000,
+                          cache: MemoryCache[IO,String,Int],
+                          currentEntries:Ref[IO,List[String]],
+                          cacheSize:Int,
+                          downloadCounter:Int=0,
+                          transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
+                          queue:Queue[IO,RequestX],
+                          cacheX:ICache[IO,ObjectS],
+                          dropboxClient:DbxClientV2,
+//
+                          events:List[EventX] =Nil,
+                        )
   case class NodeStateV5(
                           levelId:String,
                           status:Status,

@@ -92,9 +92,9 @@ object CacheX {
       //     EVICTION POLICY
       if(size == this.map.size){
         val sorted = this.map.toList.sortBy(_._2.counter)
-        println(sorted)
+//        println(sorted)
         val lowerItem = sorted.headOption
-        println(lowerItem)
+//        println(lowerItem)
 
         lowerItem match {
           case Some((k,lfuItem)) =>

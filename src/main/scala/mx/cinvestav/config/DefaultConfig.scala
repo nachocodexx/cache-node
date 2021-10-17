@@ -8,10 +8,13 @@ import cats.effect._
 import io.circe.Json
 import io.circe.generic.auto._
 import io.circe.syntax._
+import mx.cinvestav.Declarations.NodeContextV6
 import mx.cinvestav.commons.types.ObjectMetadata
-import org.http4s.circe.CirceEntityCodec.{circeEntityEncoder,circeEntityDecoder}
+import org.http4s.circe.CirceEntityCodec.{circeEntityDecoder, circeEntityEncoder}
 import org.http4s.{Header, Headers, MediaType, Method, Request, Status, Uri}
 import mx.cinvestav.Implicits._
+import mx.cinvestav.commons.payloads.AddCacheNode
+import org.typelevel.ci.CIString
 
 case class ChordGetResponse(
                              key:String,
@@ -57,6 +60,22 @@ case class LoadBalancerInfo(
                                 port:Int
                            ){
   def httpURL = s"http://$ip:$port"
+  def addNodeUri = s"http://$ip:$port/api/v6/add-node"
+  def addNode(payload:AddCacheNode)(implicit ctx:NodeContextV6) = for {
+    timestamp          <- IO.realTime.map(_.toMillis)
+    _                  <- ctx.logger.debug("ADD_NODE")
+    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
+    req                = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(this.addNodeUri)
+    ).withEntity(payload.asJson)
+      .putHeaders(
+        Headers(Header.Raw(CIString("Timestamp"),timestamp.toString))
+      )
+    status             <- client.status(req)
+    _                  <- ctx.logger.debug(s"STATUS $status")
+    _                  <- finalizer
+  }  yield ()
 }
 case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:LoadBalancerInfo)
 
@@ -72,6 +91,7 @@ case class DefaultConfigV5(
                             rabbitmq: RabbitMQClusterConfig,
                             port:Int,
                             host:String,
+                            dropboxAccessToken:String,
                             //                            replicationStrategy:String,
                             totalStorageSpace:Long,
                             keyStore:KeyStoreInfo,

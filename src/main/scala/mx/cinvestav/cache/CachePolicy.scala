@@ -3,7 +3,7 @@ package mx.cinvestav.cache
 import cats.implicits._
 import cats.effect._
 import io.chrisdavenport.mules.MemoryCache
-import mx.cinvestav.Declarations.{NodeContextV5, ProposedElement}
+import mx.cinvestav.Declarations.{NodeContextV5, NodeContextV6, ProposedElement}
 
 object cache{
   type CacheX = MemoryCache[IO,String,Int]
@@ -18,21 +18,21 @@ object cache{
   case class ReadResponse(newCache:CacheX,value:Int,found:Boolean)
   case class WriteResponse(newCache:CacheX)
   sealed trait Policy {
-    def putv2(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5):IO[PutResponse]
-    def put(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5):IO[PutResponse]
-    def write(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5):IO[WriteResponse]
-    def read(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5):IO[ReadResponse]
-    def eviction(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV5):IO[EvictionResponse]
-    def evictionv2(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV5):IO[EvictionResponse]
-    def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV5):IO[CacheX]
+    def putv2(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[PutResponse]
+    def put(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[PutResponse]
+    def write(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[WriteResponse]
+    def read(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[ReadResponse]
+    def eviction(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV6):IO[EvictionResponse]
+    def evictionv2(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV6):IO[EvictionResponse]
+    def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV6):IO[CacheX]
   }
   class LFU() extends Policy {
-    override def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV5):IO[CacheX] = for {
+    override def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV6):IO[CacheX] = for {
       currentState <- ctx.state.get
       _            <- cache.delete(key)
       _            <- currentState.currentEntries.update(_.filter(_!=key))
     } yield cache
-    override def write(cache:MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5): IO[WriteResponse] = for {
+    override def write(cache:MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6): IO[WriteResponse] = for {
       currentState <- ctx.state.get
       maybeValue   <- cache.lookup(key)
       //      _            <- currentState.currentEntries.update(_:+key)
@@ -46,7 +46,7 @@ object cache{
       response     = WriteResponse(newCache = cache)
     } yield response
 
-    override def eviction(cache: MemoryCache[IO, String, Int],remove:Boolean=false)(implicit ctx: NodeContextV5): IO[EvictionResponse] = for {
+    override def eviction(cache: MemoryCache[IO, String, Int],remove:Boolean=false)(implicit ctx: NodeContextV6): IO[EvictionResponse] = for {
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
       maybeValues  <- elements.traverse(cache.lookup).map(_.sequence).map(_.mapFilter(xs=>Option.when(xs.nonEmpty)(xs)))
@@ -68,7 +68,7 @@ object cache{
       }
     } yield x
 
-    override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] = for {
+    override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[PutResponse] = for {
 //      _            <- ctx.logger.info(s"PUT $key")
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
@@ -86,7 +86,7 @@ object cache{
       response = PutResponse(newCache = res.newCache,evicted = res.evictedItem)
     } yield response
 
-    override def read(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[ReadResponse] = for {
+    override def read(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[ReadResponse] = for {
 //      _          <- ctx.logger.info(s"GET $key")
       maybeValue <- cache.lookup(key)
       value      <- maybeValue match {
@@ -103,7 +103,7 @@ object cache{
 //      response = if ( value ==0 )  ( cache,false) else (cache,true)
     } yield response
 
-    override def putv2(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] =  for {
+    override def putv2(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[PutResponse] =  for {
 //      _            <- ctx.logger.info(s"PUT $key")
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
@@ -119,7 +119,7 @@ object cache{
       response = PutResponse(newCache = res.newCache,evicted = res.evictedItem)
     } yield response
 
-    override def evictionv2(cache: MemoryCache[IO, String, Int], remove: Boolean)(implicit ctx: NodeContextV5): IO[EvictionResponse] = for {
+    override def evictionv2(cache: MemoryCache[IO, String, Int], remove: Boolean)(implicit ctx: NodeContextV6): IO[EvictionResponse] = for {
       currentState <- ctx.state.get
       cacheSize    = ctx.config.cacheSize
       elements     <- currentState.currentEntries.get
@@ -147,7 +147,7 @@ object cache{
   }
 
   class LRU() extends Policy {
-    override def write(cache:MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV5): IO[WriteResponse] = for {
+    override def write(cache:MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6): IO[WriteResponse] = for {
       currentState       <- ctx.state.get
       downloadCounter    = currentState.downloadCounter
       maybeValue         <- cache.lookup(key)
@@ -166,7 +166,7 @@ object cache{
       response = WriteResponse(newCache = value)
     } yield response
 
-    override def eviction(cache: MemoryCache[IO, String, Int],remove:Boolean=false)(implicit ctx: NodeContextV5): IO[EvictionResponse] =  for {
+    override def eviction(cache: MemoryCache[IO, String, Int],remove:Boolean=false)(implicit ctx: NodeContextV6): IO[EvictionResponse] =  for {
       currentState       <- ctx.state.get
       elements           <- currentState.currentEntries.get
       maybeValues        <- elements.traverse(cache.lookup)
@@ -192,7 +192,7 @@ object cache{
       response = EvictionResponse(newCache = x._1,evictedItem =x._2)
     } yield response
 
-    override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] = for {
+    override def put(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[PutResponse] = for {
       currentState <- ctx.state.get
       elements     <- currentState.currentEntries.get
       cacheSize    = currentState.cacheSize
@@ -207,7 +207,7 @@ object cache{
       } yield putRes
     } yield res
 
-    override def read(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[ReadResponse] = for {
+    override def read(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[ReadResponse] = for {
 
       currentState       <- ctx.state.get
       downloadCounter    = currentState.downloadCounter
@@ -225,11 +225,11 @@ object cache{
 //      response = ReadResponse(newCache = cache,found = true)
     } yield value
 
-    override def putv2(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV5): IO[PutResponse] = ???
+    override def putv2(cache: MemoryCache[IO, String, Int], key: String)(implicit ctx: NodeContextV6): IO[PutResponse] = ???
 
-    override def evictionv2(cache: MemoryCache[IO, String, Int], remove: Boolean)(implicit ctx: NodeContextV5): IO[EvictionResponse] = ???
+    override def evictionv2(cache: MemoryCache[IO, String, Int], remove: Boolean)(implicit ctx: NodeContextV6): IO[EvictionResponse] = ???
 
-    override def remove(cache: CacheX, key: String)(implicit ctx: NodeContextV5): IO[CacheX] = ???
+    override def remove(cache: CacheX, key: String)(implicit ctx: NodeContextV6): IO[CacheX] = ???
   }
 
   //sealed trait LRU extends Policy

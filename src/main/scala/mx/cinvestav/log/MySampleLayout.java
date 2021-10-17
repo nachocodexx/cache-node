@@ -31,17 +31,24 @@ public class MySampleLayout extends LayoutBase<ILoggingEvent> {
 //                    .append(elapsedTime)
 //                    .append(CoreConstants.LINE_SEPARATOR);
 
-            sbuf.append(event.getTimeStamp())
-                    .append(" ")
-                    .append(nodeId).append(" ").append(elapsedTime)
-                    .append(" ")
-                    .append(level)
-                    .append(" [")
-                    .append(threadName)
-                    .append("]")
+            sbuf
+                    .append(elapsedTime)
                     .append(" ")
                     .append(message)
+                    .append(" ")
                     .append(CoreConstants.LINE_SEPARATOR);
+
+//            sbuf.append(event.getTimeStamp())
+//                    .append(" ")
+//                    .append(nodeId).append(" ").append(elapsedTime)
+//                    .append(" ")
+//                    .append(level)
+//                    .append(" [")
+//                    .append(threadName)
+//                    .append("]")
+//                    .append(" ")
+//                    .append(message)
+//                    .append(CoreConstants.LINE_SEPARATOR);
             return sbuf.toString();
         }
 }

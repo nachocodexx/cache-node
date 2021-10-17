@@ -1,7 +1,7 @@
 package mx.cinvestav
 import cats.effect.kernel.Outcome
 
-import java.io.{ByteArrayOutputStream, File}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, File}
 import java.net.URL
 import cats.implicits._
 import cats.effect.{IO, Ref}
@@ -10,12 +10,14 @@ import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
 import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, AmqpProperties, ExchangeName, ExchangeType, RoutingKey}
 import fs2.Pipe
 import fs2.io.file.Files
-import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, NodeContextV5, ObjectS, Payloads, ProposedElement, StorageNode, User, liftFF}
+import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, NodeContextV5, NodeContextV6, ObjectS, Payloads, ProposedElement, StorageNode, User, liftFF}
 import mx.cinvestav.cache.cache.{CachePolicy, EvictedItem}
 import mx.cinvestav.cache.CacheX.{EvictedItem => EvictedItemV2}
+import mx.cinvestav.clouds.Dropbox
 import mx.cinvestav.commons.compression
-import mx.cinvestav.commons.fileX.FileMetadata
-import mx.cinvestav.commons.types.{Location, ObjectLocation, ObjectMetadata}
+import mx.cinvestav.commons.events.{Del, EventX, Get, Push, Put, Pull => PullEvent}
+import mx.cinvestav.events.Events
+import mx.cinvestav.server.RouteV6.PushResponse
 //import mx.cinvestav.server.HttpServer.User
 import mx.cinvestav.server.Routes.UploadResponse
 import mx.cinvestav.utils.v2.{PublisherConfig, PublisherV2, RabbitMQContext}
@@ -48,19 +50,413 @@ import at.favre.lib.bytes.Bytes
 import mx.cinvestav.commons.stopwatch.StopWatch._
 object Helpers {
 
-//  Update storage capacity cache
-  def updateStorage(evictedItem: EvictedItemV2[ObjectS],level1ObjectSize:Long)(implicit ctx:NodeContextV5 ): IO[Unit] = {
+
+  def putInCacheGeneric(guid:String, value:ObjectS,newEvents:Option[EvictedItemV2[ObjectS]] => List[EventX] )(implicit ctx:NodeContextV6): IO[Response[IO]] = {
+
     for {
-      _                      <-ctx.state.update( s=>{
-        val evictedItemSize = evictedItem.value.metadata.getOrElse("objectSize","0").toLong
-        s.copy(
-          usedStorageSpace = (s.usedStorageSpace - evictedItemSize) + level1ObjectSize,
-          availableStorageSpace = (s.availableStorageSpace +evictedItemSize) - level1ObjectSize
-        )
-      }
+      arrivalTime   <- IO.realTime.map(_.toMillis)
+      currentState  <- ctx.state.get
+      currentLevel  = ctx.config.level
+      currentNodeId = ctx.config.nodeId
+      cache         = currentState.cacheX
+      levelId       = currentState.levelId
+      objectSize    = value.bytes.length
+      putResponse <- cache.put(key=guid,value=value)
+
+      _ <- ctx.state.update(
+        s=>{
+          s.copy(
+            events = s.events ++ newEvents(putResponse.evictedItem)
+          )
+        }
       )
-    } yield ()
+      response    <- putResponse.evictedItem match {
+        case Some(evictedElement) =>  for {
+          endAt0     <- IO.realTime.map(_.toMillis)
+          //            get service time
+          putServiceTime      = endAt0 - arrivalTime
+          //        add event
+          _          <- ctx.logger.info(s"PUT $guid $levelId $putServiceTime")
+          //              Update storage of the node
+          // SENT TO CLOUD
+          evictedObjectExt = evictedElement.value.metadata.getOrElse("extension","bin")
+          filename = s"${evictedElement.key}.$evictedObjectExt"
+
+          pushToCloud = for{
+
+            pushTimestamp      <- IO.realTime.map(_.toMillis)
+            rawEvents          <- ctx.state.get.map(_.events)
+            events             =  Events.relativeInterpretEvents(events = rawEvents)
+            alreadyPushToCloud = Events.alreadyPushedToCloud(objectId = evictedElement.key , events = events)
+            _                   <- ctx.logger.debug(s"ALREADY_PUSH_TO_CLOUD[${evictedElement.key}] $alreadyPushToCloud")
+            _                  <- if(alreadyPushToCloud) IO.unit
+            else {
+              for {
+                metadata           <- Dropbox.uploadObject(currentState.dropboxClient)(
+                  filename = filename,
+                  in = new ByteArrayInputStream(evictedElement.value.bytes)
+                )
+                _ <- ctx.logger.debug(s"DROPBOX_METADATA $metadata")
+                //            get timestamp
+                endAt     <- IO.realTime.map(_.toMillis)
+                //            get service time
+                time      = endAt - arrivalTime
+                _ <- ctx.logger.info(s"PUT ${evictedElement.key} CLOUD $time")
+                pushEvent = Push(
+                  eventId = UUID.randomUUID().toString,
+                  serialNumber = 0,
+                  nodeId = currentNodeId,
+                  objectId = evictedElement.key,
+                  objectSize = evictedElement.value.bytes.length,
+                  pushTo = "Dropbox",
+                  timestamp = pushTimestamp,
+                  milliSeconds = time
+                )
+                _ <- ctx.state.update(s=>s.copy(events = s.events :+ pushEvent.copy(serialNumber = s.events.length)))
+              } yield ()
+            }
+            //            metadata <- Dropbox.uploadObject(currentState.dropboxClient)(
+//              filename = filename,
+//              in = new ByteArrayInputStream(evictedElem.value.bytes)
+//            )
+//            _ <- ctx.logger.debug(s"DROPBOX_METADATA $metadata")
+//            //            get timestamp
+//            endAt     <- IO.realTime.map(_.toMillis)
+//            //            get service time
+//            time      = endAt - arrivalTime
+//            _ <- ctx.logger.info(s"PUT ${evictedElem.key} CLOUD $time")
+          } yield ()
+
+          _ <- pushToCloud.start
+          responsePayload         = PushResponse(
+            userId= "USER_ID",
+            guid=guid,
+            objectSize=  value.bytes.length,
+            milliSeconds = putServiceTime,
+            timestamp = arrivalTime,
+            level  = ctx.config.level,
+            nodeId = ctx.config.nodeId
+          )
+          //
+          response <- Ok(responsePayload.asJson,
+            Headers(
+              Header.Raw(CIString("Evicted-Object-Id"),evictedElement.key),
+              Header.Raw(CIString("Evicted-Object-Size"),evictedElement.value.bytes.length.toString)
+            )
+          )
+          //
+        } yield response
+        case None =>  for{
+          endAt    <- IO.realTime.map(_.toMillis)
+          time     = endAt - arrivalTime
+          responsePayload = PushResponse(
+            userId= "USER_ID",
+            guid=guid,
+            objectSize=  objectSize,
+            milliSeconds = time,
+            timestamp = endAt,
+            level  = ctx.config.level,
+            nodeId = ctx.config.nodeId
+          )
+          //        add event
+          response <- Ok(responsePayload.asJson)
+          _ <- ctx.logger.info(s"PUT $guid $levelId $time")
+          //              else ctx.logger.info("")
+        } yield response
+      }
+    } yield response
   }
+
+  def putInCacheDownload(arrivalTime:Long,guid:String,value:ObjectS,pullEvent: PullEvent)(implicit ctx:NodeContextV6) = {
+    for {
+//      arrivalTime   <- IO.realTime.map(_.toMillis)
+      currentState  <- ctx.state.get
+      currentLevel  = ctx.config.level
+      currentNodeId = ctx.config.nodeId
+      cache         = currentState.cacheX
+      objectSize    = value.bytes.length
+      startPutServiceTime <- IO.realTime.map(_.toMillis)
+      putResponse <- cache.put(key= guid,value = value)
+
+      newHeaders <- putResponse.evictedItem match {
+        case Some(evictedElement) => for {
+          _ <- ctx.logger.debug("DOWNLOAD_EVICTION")
+          putServiceTime <- IO.realTime.map(_.toMillis).map( _ - startPutServiceTime)
+//        ___________________________________________________________________________________
+          pushToCloud = for{
+            pushTimestamp      <- IO.realTime.map(_.toMillis)
+            rawEvents          <- ctx.state.get.map(_.events)
+            events             =  Events.relativeInterpretEvents(events = rawEvents)
+            alreadyPushToCloud = Events.alreadyPushedToCloud(objectId = evictedElement.key , events = events)
+//            _                   <- ctx.logger.debug(s"ALREADY_PUSH_TO_CLOUD[${evictedElement.key}] $alreadyPushToCloud")
+            _                  <- if(alreadyPushToCloud) IO.unit
+            else {
+               for {
+//                 _ <- ctx.logger.debug("BEFORE_PUSH")
+                 _        <- IO.unit
+                 filename = s"${evictedElement.key}.${evictedElement.value.metadata.getOrElse("extension","")}"
+                 metadata           <- Dropbox.uploadObject(currentState.dropboxClient)(
+                   filename = filename,
+                   in = new ByteArrayInputStream(evictedElement.value.bytes)
+                 ).onError{ t=>
+                   ctx.logger.error(t.getMessage)
+                 }
+//                 _ <- ctx.logger.debug("AFTER_PUSH")
+//                 _ <- ctx.logger.debug(s"DROPBOX_METADATA $metadata")
+                 //            get timestamp
+                 endAt     <- IO.realTime.map(_.toMillis)
+                 //            get service time
+                 time      = endAt - arrivalTime
+                 _ <- ctx.logger.info(s"PUT ${evictedElement.key} CLOUD $time")
+                 _ <- ctx.state.update {
+                   s =>
+                     val newEvents = List(
+                       pullEvent.copy(serialNumber = s.events.length),
+                       Del(
+                         eventId = UUID.randomUUID().toString,
+                         serialNumber = s.events.length+1,
+                         nodeId = currentNodeId,
+                         objectId = evictedElement.key,
+                         objectSize = evictedElement.value.bytes.length,
+                         timestamp = pullEvent.timestamp+10,
+                         milliSeconds = 1
+                       ),
+                       Put(
+                         eventId = UUID.randomUUID().toString,
+                         serialNumber = s.events.length+2,
+                         nodeId = currentNodeId,
+                         objectId = guid,
+                         objectSize = objectSize,
+                         timestamp = pullEvent.timestamp+20,
+                         milliSeconds = putServiceTime
+                       ),
+                       Get(
+                         eventId = UUID.randomUUID().toString,
+                         serialNumber = s.events.length+3,
+                         nodeId = currentNodeId,
+                         objectId = guid,
+                         objectSize = objectSize,
+                         timestamp = pullEvent.timestamp+30,
+                         milliSeconds = 1
+                       ),
+                       Push(
+                         eventId = UUID.randomUUID().toString,
+                         serialNumber = s.events.length + 4,
+                         nodeId = currentNodeId,
+                         objectId = evictedElement.key,
+                         objectSize = evictedElement.value.bytes.length,
+                         pushTo = "Dropbox",
+                         timestamp = pushTimestamp,
+                         milliSeconds = time
+                       )
+                     )
+                     s.copy(
+                       events = s.events ++ newEvents
+                     )
+                 }
+               } yield ()
+            }
+          } yield ()
+          //          __________________________________________
+
+//          _ <- ctx.state.update{ s=>
+//
+//            //          __________________________________________
+//            s.copy(events = s.events ++ List(pullEvent.copy(serialNumber = s.events.length),putEvent,getEvent,delEvent ))
+//          }
+          _ <- pushToCloud.start
+
+          newHeaders = Headers(
+            Header.Raw(CIString("Object-Id"), guid),
+            Header.Raw(CIString("Object-Size"), objectSize.toString ),
+            Header.Raw(CIString("Level"),currentLevel.toString),
+            Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+            Header.Raw(CIString("Evicted-Object-Id"),evictedElement.key),
+            Header.Raw(CIString("Evicted-Object-Size"),evictedElement.value.bytes.length.toString)
+          )
+        } yield newHeaders
+        case None => for {
+//          _ <- ctx.logger.debug("DOWNLOAD_NO_EVICTION")
+          putServiceTime <- IO.realTime.map(_.toMillis).map( _ - arrivalTime)
+          _ <- ctx.state.update{ s=>
+            val putEvent = Put(
+              eventId = UUID.randomUUID().toString,
+              serialNumber = s.events.length+1,
+              nodeId = currentNodeId,
+              objectId = guid,
+              objectSize = objectSize,
+              timestamp = pullEvent.timestamp +10,
+              milliSeconds = putServiceTime
+            )
+            val getEvent = Get(
+              eventId = UUID.randomUUID().toString,
+              serialNumber = s.events.length+2,
+              nodeId = currentNodeId,
+              objectId = guid,
+              objectSize = objectSize,
+              timestamp = pullEvent.timestamp+20,
+              milliSeconds = 1L
+            )
+            s.copy(events = s.events :+ pullEvent.copy(serialNumber = s.events.length) :+ putEvent:+ getEvent)
+          }
+          newHeaders = Headers(
+            Header.Raw(CIString("Object-Id"), guid),
+            Header.Raw(CIString("Object-Size"),objectSize.toString ),
+            Header.Raw(CIString("Level"),currentLevel.toString),
+            Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+          )
+        } yield newHeaders
+      }
+    } yield newHeaders
+  }
+
+  def putInCacheUpload(guid:String, value:ObjectS)(implicit ctx:NodeContextV6): IO[Response[IO]] = {
+
+    for {
+      arrivalTime   <- IO.realTime.map(_.toMillis)
+      currentState  <- ctx.state.get
+      currentLevel  = ctx.config.level
+      currentNodeId = ctx.config.nodeId
+      cache         = currentState.cacheX
+      levelId       = currentState.levelId
+      objectSize    = value.bytes.length
+      putResponse <- cache.put(key=guid,value=value)
+      //        CHECK IF EVICTION OCCUR
+      response    <- putResponse.evictedItem match {
+        case Some(evictedElem) =>  for {
+          endAt0     <- IO.realTime.map(_.toMillis)
+          //            get service time
+          putServiceTime      = endAt0 - arrivalTime
+          //        add event
+          _ <- ctx.state.update(
+            s=>{
+              val event = Put(
+                nodeId = currentNodeId,
+                eventId = UUID.randomUUID().toString,
+                serialNumber = s.events.length,
+                objectId =guid,
+                objectSize =  value.bytes.length,
+                timestamp = arrivalTime,
+                milliSeconds = putServiceTime
+              )
+              val delEvent = Del(
+                eventId = UUID.randomUUID().toString,
+                serialNumber = s.events.length+1,
+                nodeId = currentNodeId,
+                objectId = evictedElem.key,
+                objectSize = evictedElem.value.bytes.length,
+                timestamp = arrivalTime+100,
+                milliSeconds = 1
+              )
+              s.copy(
+                events = s.events :+ event :+ delEvent
+              )
+            }
+          )
+          _          <- ctx.logger.info(s"PUT $guid $levelId $putServiceTime")
+          //              Update storage of the node
+          // SENT TO CLOUD
+          evictedObjectExt = evictedElem.value.metadata.getOrElse("extension","bin")
+          filename = s"${evictedElem.key}.$evictedObjectExt"
+//          _ <- ctx.logger.debug(s"FILENAME $filename")
+
+          pushToCloud = for{
+            metadata <- Dropbox.uploadObject(currentState.dropboxClient)(
+              filename = filename,
+              in = new ByteArrayInputStream(evictedElem.value.bytes)
+            )
+//            _ <- ctx.logger.debug(s"DROPBOX_METADATA $metadata")
+            //            get timestamp
+            endAt     <- IO.realTime.map(_.toMillis)
+            //            get service time
+            time      = endAt - arrivalTime
+            _ <- ctx.logger.info(s"PUT ${evictedElem.key} CLOUD $time")
+            _ <- ctx.state.update{ s=>
+              val pushEvent = Push(
+                eventId = UUID.randomUUID().toString,
+                serialNumber = s.events.length,
+                nodeId = currentNodeId,
+                objectId = evictedElem.key,
+                objectSize = evictedElem.value.bytes.length,
+                pushTo = "Dropbox",
+                timestamp = endAt,
+                milliSeconds = time
+              )
+              s.copy(events = s.events :+ pushEvent)
+            }
+          } yield ()
+
+          _ <- pushToCloud.start
+          responsePayload         = PushResponse(
+            userId= "USER_ID",
+            guid=guid,
+            objectSize=  value.bytes.length,
+            milliSeconds = putServiceTime,
+            timestamp = arrivalTime,
+            level  = ctx.config.level,
+            nodeId = ctx.config.nodeId
+          )
+          //
+          response <- Ok(responsePayload.asJson,
+            Headers(
+              Header.Raw(CIString("Evicted-Object-Id"),evictedElem.key),
+              Header.Raw(CIString("Evicted-Object-Size"),evictedElem.value.bytes.length.toString)
+            )
+          )
+          //
+        } yield response
+        case None =>  for{
+          endAt           <- IO.realTime.map(_.toMillis)
+          putServiceTime  = endAt - arrivalTime
+          responsePayload = PushResponse(
+            userId= "USER_ID",
+            guid=guid,
+            objectSize=  objectSize,
+            milliSeconds = putServiceTime,
+            timestamp = endAt,
+            level  = ctx.config.level,
+            nodeId = ctx.config.nodeId
+          )
+          //        add event
+          _ <- ctx.state.update(
+            s=>{
+              val event = Put(
+                nodeId = currentNodeId,
+                eventId = UUID.randomUUID().toString,
+                serialNumber = s.events.length,
+                objectId =guid,
+                objectSize =  objectSize,
+                timestamp = arrivalTime,
+                milliSeconds = putServiceTime
+              )
+              s.copy(
+                events = s.events :+ event
+              )
+            }
+          )
+          response <- Ok(responsePayload.asJson)
+          _ <- ctx.logger.info(s"PUT $guid $levelId $putServiceTime")
+          //              else ctx.logger.info("")
+        } yield response
+      }
+    } yield response
+  }
+
+//
+//  def addNodeToLB()
+//  Update storage capacity cache
+//  def updateStorage(evictedItem: EvictedItemV2[ObjectS],level1ObjectSize:Long)(implicit ctx:NodeContextV6 ): IO[Unit] = {
+//    for {
+//      _                      <-ctx.state.update( s=>{
+//        val evictedItemSize = evictedItem.value.metadata.getOrElse("objectSize","0").toLong
+//        s.copy(
+//          usedStorageSpace = (s.usedStorageSpace - evictedItemSize) + level1ObjectSize,
+//          availableStorageSpace = (s.availableStorageSpace +evictedItemSize) - level1ObjectSize
+//        )
+//      }
+//      )
+//    } yield ()
+//  }
   //
   def streamBytesToBuffer:Pipe[IO,Byte,ByteArrayOutputStream] = s0 =>
     fs2.Stream.suspend{
@@ -72,7 +468,7 @@ object Helpers {
     }
 
 
-  def evictedItemRedirectTo(req:Request[IO],oneURL:String,evictedElem:EvictedItemV2[ObjectS],user: User)(implicit ctx:NodeContextV5): IO[Response[IO]] = for {
+  def evictedItemRedirectTo(req:Request[IO],oneURL:String,evictedElem:EvictedItemV2[ObjectS],user: User)(implicit ctx:NodeContextV6): IO[Response[IO]] = for {
     _ <- IO.unit
     body   = fs2.Stream.emits(evictedElem.value.bytes).covary[IO]
 //    body     = buffer.flatMap(buffer=>Stream.emits(buffer.toByteArray))
@@ -185,198 +581,6 @@ object Helpers {
   } yield ()
 
   //        uploadUrl = s"http://$ip:$port/uploadv2"
-
-  def onUp(operationId:Int,authReq: AuthedRequest[IO,User])(implicit ctx:NodeContextV5) = for {
-//    GET CURRENT SATE
-    currentState         <- ctx.state.get
-//   GET CURRENT TIME
-    timestamp            <- IO.realTime.map(_.toMillis)
-//
-    nodeId               = ctx.config.nodeId
-    poolId               = ctx.config.poolId
-    port                 = ctx.config.port
-    storagePath          =  ctx.config.storagePath
-    ip                   = currentState.ip
-    baseUrl              = s"http://${ip}:${port}"
-    cacheNodes           = currentState.cacheNodePubs
-    //    REQUEST
-    user                 = authReq.context
-    req                  = authReq.req
-    payload              <- req.as[Multipart[IO]]
-    //   CACHE
-    cacheX               = CachePolicy(ctx.config.cachePolicy)
-    //
-    parts                = payload.parts
-    headers              = req.headers
-    compressionAlgorithm = headers.get(CIString("Compression-Algorithm")).map(_.head).map(_.value).map(_.toUpperCase()).getOrElse("")
-    //
-    currentOperationId   = currentState.currentOperationId
-    _                    <- ctx.state.update(_.copy(currentOperationId = operationId.some ))
-    //
-    ca                   = compression.fromString(compressionAlgorithm)
-    userId               =  user.id
-    bucketName           =  user.bucketName
-    //
-    baseStr              =  s"$storagePath/$nodeId/$userId/$bucketName"
-    basePath             =  Paths.get(baseStr)
-    _                    <- NIOFIles[IO].createDirectories(basePath)
-    _                    <- parts.traverse{ part=>
-      for {
-        _                <- IO.unit
-        cache            = currentState.cache
-        _                <- part.headers.headers.traverse(header=>ctx.logger.debug(s"HEADER $header"))
-//      HEADERS
-        partHeaders      = part.headers
-        guid             = partHeaders.get(key =ci"guid").map(_.head).map(_.value)
-//          .map(UUID.fromString)
-          .getOrElse(UUID.randomUUID().toString)
-        contentType      = partHeaders.get(ci"Content-Type").map(_.head.value).getOrElse( "application/octet-stream")
-        _ <- ctx.logger.debug("BEFORE_CHECKSUM")
-        contentLength    = partHeaders.get(ci"Content-Length").flatMap(_.head.value.toIntOption)
-//
-        originalFilename = part.filename.getOrElse("default")
-        originalMetadata = FileMetadata.fromPath(Paths.get(originalFilename))
-        _                <- ctx.logger.debug(originalMetadata.toString)
-        originalName     = part.name.getOrElse("default")
-        //
-        sinkPath         =  Paths.get(baseStr+s"/$guid")
-        stream           = part.body
-//        rawBytes         <- stream.compile.to(Array)
-
-        checksumInfoFiber         <- stream.through(fs2.hash.sha512)
-          .compile.to(Array)
-          .map(Bytes.from(_).encodeHex(false))
-          .stopwatch
-          .start
-        writeFile        = stream.through(Files[IO].writeAll(path=sinkPath)).compile.drain
-//
-        metadata         = ObjectMetadata(
-          guid =  guid,
-          size  = 0L,
-          compression = ca.token,
-          bucketName = bucketName,
-          filename = originalFilename,
-          name = originalName,
-          locations = ObjectLocation(
-            nodeId = nodeId,
-            poolId = poolId,
-            url = baseUrl+s"/download/$guid"
-          )::Nil,
-          policies = Nil,
-          checksum = "",
-          userId = userId.toString,
-          //              .getOrElse(UUID.randomUUID().toString),
-          version = 1,
-          timestamp = timestamp,
-          contentType = contentType,
-          extension = originalMetadata.extension.value
-        )
-        //
-        putRes           <- cacheX.putv2(cache,guid.toString)
-        //      _____________________________________________________________________
-        _                <- putRes.evicted match {
-//         CACHE IS FULL
-          case Some(element) =>  for {
-            _             <-  ctx.logger.debug("CONSENSUS_INIT")
-            _cacheNodes   =   cacheNodes.filter(_._1!=nodeId)
-            cachePubs     =  _cacheNodes.values.toList
-            _cacheNodeIds =  _cacheNodes.keys.toList
-            _             <- ctx.logger.debug("CACHE_NODES "+_cacheNodeIds.mkString("//"))
-            chordNode     =  ctx.config.keyStore.nodes.head
-            putStatus     <- chordNode.put(guid,metadata.asJson.noSpaces)
-            _             <- ctx.logger.debug(s"PUT_STATUS $putStatus")
-            //            Transaction
-            transactionId = guid
-            transaction   = CacheTransaction(
-              id = transactionId,
-              cacheNodes =_cacheNodeIds,
-              timestamp = timestamp,
-              proposedElement = ProposedElement(element.key,element.value),
-              nodeId = nodeId,
-              data = stream,
-              userId = userId,
-              bucketName = bucketName,
-              filename = FileMetadata.fromPath(Paths.get ( originalFilename) ).filename.value,
-              compressionAlgorithm=ca,
-              authedRequest=authReq
-            )
-            //            ADD_TRANSACTION_LOCAL
-            _             <- ctx.state.update(s=>s.copy(transactions = s.transactions+ (transactionId->transaction)))
-            //            SEND PREPARE TO CACHE_NODES
-            payload       = Payloads.Prepare(
-              operationId = operationId,
-              guid = transactionId,
-              timestamp=timestamp,
-            ).asJson.noSpaces
-            //
-            properties = AmqpProperties(
-              headers = Map("commandId" -> StringVal(CommandIds.PREPARE)  ),
-              replyTo = nodeId.some
-            )
-            //
-            msg        = AmqpMessage[String](payload=payload,properties=properties)
-            //
-            implicit0(rabbitMQContext:RabbitMQContext) <- IO.pure(ctx.rabbitMQContext)
-            connection                      = rabbitMQContext.connection
-            client                          = rabbitMQContext.client
-            (channel,finalizer)             <- client.createChannel(connection).allocated
-            implicit0(_channel:AMQPChannel) <- IO.pure(channel)
-            _                               <- cachePubs.traverse(_.publishWithChannel(msg))
-            _                               <- finalizer
-//            _          <- ctx.logger.debug("INIT PAXOS")
-          } yield ()
-//         CACHE HAS EMPTY SLOTS
-          case None => for {
-            checksum <- checksumInfoFiber.join.flatMap {
-              case Outcome.Succeeded(fa) => for {
-                value <- fa
-                _     <- ctx.logger.info(s"CHECKSUM $guid ${value.duration.toMillis}")
-              } yield value.result
-              case Outcome.Errored(e) => ctx.logger.error(e.getMessage) *> "NO_CHECKSUM".pure[IO]
-              case Outcome.Canceled() => ctx.logger.error("CANCELLED") *> "NO_CHECKSUM".pure[IO]
-            }
-
-//            buffer     = new ByteArrayOutputStream()
-//            rawBytes  <- stream.chunkN(8192).fold(buffer) { (buffer, chunk) =>
-//                buffer.write(chunk.toArray)
-//                buffer
-//            }.compile.lastOrError
-//            _ <- ctx.logger.debug(s"BUFFER ${buffer.size()}")
-//                .compile.to(Array)
-            _           <- writeFile
-            _           <- compression.compress(ca=ca,source = sinkPath.toString,baseStr).value.flatMap {
-              case Left(e) => ctx.logger.error(e.getMessage)
-              case Right(value) => for {
-                _           <- ctx.logger.debug(value.toString)
-                _ <- ctx.logger.info(s"COMPRESSION $guid ${value.sizeIn} ${value.sizeOut} ${value.millSeconds}")
-                newMetadata = metadata.copy(
-                  checksum=checksum,
-                  size = value.sizeOut
-                )
-                _ <- ctx.config.keyStore.nodes.head.put(guid.toString,newMetadata.asJson.noSpaces).start
-//                _ <- ctx.logger.debug(keyStoreStatus.toString)
-                _           <- ctx.logger.debug(newMetadata.asJson.toString)
-                _           <- ctx.state.update(_.copy(status=StatuX.Up,currentOperationId = None))
-                _           <- NIOFIles[IO].delete(sinkPath)
-                endTime     <- IO.realTime.map(_.toMillis)
-                duration    = endTime-timestamp
-                _           <- ctx.logger.info(s"UPLOAD $guid ${value.sizeOut} $duration")
-              } yield ()
-            }.onError{ t=> ctx.logger.error(t.getMessage)}
-          } yield ()
-        }
-        //          UPDATE CACHE
-        _                <- ctx.state.update(_.copy(cache=putRes.newCache))
-        _ <- ctx.logger.debug("______________________________________________________________________")
-      } yield ()
-    }
-    //
-    endedAt   <- IO.realTime.map(_.toMillis)
-    payload   = UploadResponse(operationId = UUID.randomUUID().toString ,uploadSize = 0L,duration = endedAt-timestamp )
-    response  <- Ok("RESPONSE")
-
-  } yield ()
-
 
 
   def sendRequest(req:Request[IO])(implicit ctx:NodeContextV5) = for {

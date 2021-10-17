@@ -14,6 +14,7 @@ object Dependencies {
 //    lazy val ApacheCommonsIO = "commons-io" % "commons-io" % "2.11.0"
     lazy val Mules = "io.chrisdavenport" %% "mules"     % "0.5.0-M2"
     lazy val CatsNIO = "io.github.akiomik" %% "cats-nio-file" % "1.6.0"
+    lazy val DropboxSDK = "com.dropbox.core" % "dropbox-core-sdk" % "4.0.1"
     val http4sVersion = "1.0.0-M23"
     lazy val Http4s =Seq(
       "org.http4s" %% "http4s-dsl" ,
@@ -21,7 +22,7 @@ object Dependencies {
       "org.http4s" %% "http4s-blaze-client",
       "org.http4s" %% "http4s-circe"
     ).map(_ % http4sVersion)
-    Seq(RabbitMQUtils,PureConfig,Commons,MUnitCats,Log4Cats,ScalaCompress,Mules,CatsNIO) ++Http4s
+    Seq(RabbitMQUtils,PureConfig,Commons,MUnitCats,Log4Cats,ScalaCompress,Mules,CatsNIO,DropboxSDK) ++Http4s
   }
 }
 

@@ -55,6 +55,9 @@ class UploadV6Spec extends munit .CatsEffectSuite {
   final val userId   = UUID.fromString("3acf3090-4025-4516-8fb5-fa672589b465")
   test("Mimetype"){
     val mt = MediaType.forExtension("jpg")
+    val mt0 = MediaType.unsafeParse("application/octet-stream")
+    println(mt0)
+    println(mt0.fileExtensions)
     println(mt)
   }
   test("Workload"){

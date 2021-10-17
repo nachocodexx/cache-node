@@ -2,10 +2,13 @@ package mx.cinvestav.server
 // Cats
 import cats.implicits._
 import cats.effect._
-import mx.cinvestav.Declarations.objectSEncoder
+import mx.cinvestav.Declarations.{NodeContextV6, objectSEncoder}
+import mx.cinvestav.clouds.Dropbox
+import mx.cinvestav.commons.events.Del
 import org.http4s.{MediaType, Method}
 import org.http4s.blaze.client.BlazeClientBuilder
 
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import scala.concurrent.ExecutionContext.global
 // Cats NIO
 import cats.nio.file.{Files=>NIOFiles}
@@ -13,7 +16,9 @@ import cats.nio.file.{Files=>NIOFiles}
 import fs2.io.file.Files
 // Local
 import mx.cinvestav.Declarations.{NodeContextV5, ObjectS, User}
+import mx.cinvestav.events.Events
 import mx.cinvestav.Helpers
+import mx.cinvestav.commons.events.{Put,Get,Pull=>PullEvent,EventXOps}
 // Http4s
 import org.http4s.{Header, Headers, Request, Uri}
 import org.http4s.{headers=>HEADERS}
@@ -22,7 +27,6 @@ import org.http4s.circe.CirceEntityEncoder._
 import org.http4s.circe.CirceEntityDecoder._
 import org.http4s.AuthedRoutes
 import org.typelevel.ci.CIString
-import org.http4s.HttpRoutes
 import org.http4s.implicits._
 import org.http4s.dsl.io._
 // Circe
@@ -46,20 +50,26 @@ object RouteV6 {
 //                           evictedItem
                          )
 
-  def apply()(implicit ctx:NodeContextV5): AuthedRoutes[User, IO] =  AuthedRoutes.of[User,IO]{
+  def apply()(implicit ctx:NodeContextV6): AuthedRoutes[User, IO] =  AuthedRoutes.of[User,IO]{
     case authReq@POST -> Root / "upload" as user => for {
-      arrivalTime  <- IO.realTime.map(_.toMillis)
+//      arrivalTime  <- IO.realTime.map(_.toMillis)
       currentState <- ctx.state.get
-      currentLevel = ctx.config.level
-      cache        = currentState.cacheX
+//      currentLevel = ctx.config.level
+//      currentNodeId = ctx.config.nodeId
+//      cache        = currentState.cacheX
       req          = authReq.req
       multipart    <- req.as[Multipart[IO]]
       parts        = multipart.parts
+//      levelId      = currentState.levelId
+//    _______________________________________________
       responses    <- parts.traverse{ part =>
         for{
           _           <- ctx.logger.debug(part.headers.toString)
           partHeaders = part.headers
-          guid        = partHeaders.get(CIString("guid")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+          guid        = partHeaders.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+          contentType = partHeaders.get(HEADERS.`Content-Type`.headerInstance.name).map(_.head.value).getOrElse("application/octet-stream")
+          media       = MediaType.unsafeParse(contentType)
+          objectExtension = media.fileExtensions.head
           body        = part.body
           bytesBuffer <- body.compile.to(Array)
 //            .through(Helpers.streamBytesToBuffer)
@@ -69,91 +79,23 @@ object RouteV6 {
             .get(org.http4s.headers.`Content-Length`.name)
             .map(_.head.value)
             .getOrElse("0")
-          _ <- ctx.state.update(
-            s=>{
-              val newUsedStorageSpace = s.usedStorageSpace+objectSize.toLong
-              s.copy(
-                usedStorageSpace = newUsedStorageSpace,
-                availableStorageSpace = s.totalStorageSpace - newUsedStorageSpace
-              )
-            }
-          )
 
           value       = ObjectS(
             guid=guid,
             bytes= bytesBuffer,
-            metadata=Map("objectSize"->objectSize)
+            metadata=Map(
+              "objectSize"->objectSize,
+              "contentType" -> contentType,
+              "extension" -> objectExtension
+            )
           )
           //        PUT TO CACHE
-          putResponse <- cache.put(key=guid,value=value)
-          //        CHECK IF EVICTION OCCUR
-          response    <- putResponse.evictedItem match {
-            case Some(evictedElem) =>  for {
-              endAt0     <- IO.realTime.map(_.toMillis)
-              //            get service time
-              time0      = endAt0 - arrivalTime
-              _          <- ctx.logger.info(s"PUSH_LOCAL $guid $time0")
-//              Update storage of the node
-              _          <- ctx.state.update( s=>{
-                  val evictedObjectSize = evictedElem.value.metadata
-                    .get("objectSize")
-                    .flatMap(_.toLongOption)
-                    .getOrElse(0L)
-                  s.copy(
-                    usedStorageSpace =  s.usedStorageSpace - evictedObjectSize,
-                    availableStorageSpace =  s.availableStorageSpace + evictedObjectSize
-                  )
-                }
-
-              )
-//
-              oneURL    = if(currentLevel ==0 ) ctx.config.loadBalancer.one.httpURL else ctx.config.loadBalancer.cloud.httpURL
-              levelOneResponse        <- Helpers.evictedItemRedirectTo(req=req,oneURL=oneURL,evictedElem=evictedElem,user=user)
-              _ <- ctx.logger.debug(s"LEVEL_ONE_RESPONSE $levelOneResponse")
-              //            get timestamp
-              endAt     <- IO.realTime.map(_.toMillis)
-              //            get service time
-              time      = endAt - arrivalTime
-              responsePayload         = PushResponse(
-                userId=user.id.toString,
-                guid=guid,
-                objectSize=  objectSize.toLong,
-                milliSeconds = time,
-                timestamp = endAt,
-                level  = ctx.config.level,
-                nodeId = ctx.config.nodeId
-              )
-//
-              response <- Ok(responsePayload.asJson,
-                  Headers(
-                    Header.Raw(CIString("Evicted-Item"),evictedElem.key),
-                  )
-              )
-//
-            } yield response
-            case None =>  for{
-              endAt    <- IO.realTime.map(_.toMillis)
-              time     = endAt - arrivalTime
-              responsePayload = PushResponse(
-                userId=user.id.toString,
-                guid=guid,
-                objectSize=  objectSize.toLong,
-                milliSeconds = time,
-                timestamp = endAt,
-                level  = ctx.config.level,
-                nodeId = ctx.config.nodeId
-              )
-              response <- Ok(responsePayload.asJson)
-              _ <- ctx.logger.info(s"PUSH_${currentState.levelId} $guid $time")
-//              else ctx.logger.info("")
-            } yield response
-          }
+          response <- Helpers.putInCacheUpload(guid= guid, value = value)
         } yield response
       }.map(_.head)
       _ <- ctx.logger.debug(responses.toString)
       _ <- ctx.logger.debug("____________________________________________________")
     } yield responses
-
     case authReq@POST -> Root / "replicate" / UUIDVar(guid) as user => for {
       currentState <- ctx.state.get
       cacheX               = currentState.cacheX
@@ -223,21 +165,35 @@ object RouteV6 {
       currentNodeId = ctx.config.nodeId
       cache         = currentState.cacheX
       req           = authReq.req
-      oneLevelURL   = ctx.config.loadBalancer.one.httpURL
-      zeroLevelURL  = ctx.config.loadBalancer.zero.httpURL
+      headers       = req.headers
+      objectExt     = headers.get(CIString("Object-Extension")).map(_.head.value).getOrElse("")
+      levelId       = currentState.levelId
       getResponse   <- cache.get(guid.toString)
       response      <- getResponse.item match {
         case Some(element) => for {
-          _     <- ctx.logger.info(s"HIT $guid ${element.counter}")
-          streamBuffer = element.value.bytes
-          streamBytes  = fs2.Stream.emits(streamBuffer).covary[IO]
-          bytesLen     =  streamBuffer.length
+          _            <- ctx.logger.info(s"GET $guid $levelId ${element.counter}")
+          rawBytes = element.value.bytes
+          streamBytes  = fs2.Stream.emits(rawBytes).covary[IO]
+          bytesLen     =  rawBytes.length
           _            <- ctx.logger.debug(s"RAW_BYTES $bytesLen")
+          getServiceTime <- IO.realTime.map(_.toMillis).map(_ - arrivalTime)
+          _            <- ctx.state.update{ s=>
+            val event = Get(
+              nodeId       = currentNodeId,
+              eventId      = UUID.randomUUID().toString,
+              serialNumber = s.events.length,
+              objectId     = guid.toString,
+              objectSize   = bytesLen,
+              timestamp    = arrivalTime,
+              milliSeconds = getServiceTime
+            )
+            s.copy(events = s.events :+ event)
+          }
           response <- Ok(
             streamBytes,
             Headers(
-              Header.Raw(CIString("guid"), element.value.guid),
-              Header.Raw(CIString("Object-Size"),element.value.metadata.getOrElse("objectSize","0")),
+              Header.Raw(CIString("Object-Id"), element.value.guid),
+              Header.Raw(CIString("Object-Size"), bytesLen.toString ),
               Header.Raw(CIString("Level"),currentLevel.toString),
               Header.Raw(CIString("Node-Id"),ctx.config.nodeId)
             ),
@@ -245,103 +201,48 @@ object RouteV6 {
 
         } yield response
         case None => for {
-          _                      <- ctx.logger.info(s"MISS $guid")
-          response               <- if(currentLevel == 0 ) {
-            for {
-              _                      <- IO.unit
-              //            GET ELEMENT FROM SYNC
-              redirectRes            <- Helpers.redirectTo(oneLevelURL,req)
-              _                      <-ctx.logger.debug(s"PULL_SYNC_RESPONSE $redirectRes")
-              level1Bytes            = redirectRes.body.covary[IO]
-              rawBytesBuffer         <- level1Bytes.compile.to(Array)
-              bytesLen               = rawBytesBuffer.length
-              _                      <- ctx.logger.debug(s"RAW_BYTES $bytesLen")
-              serviceTime0           <- IO.realTime.map(_.toMillis).map(_ - arrivalTime)
-              _                      <- ctx.logger.info(s"PULL_SYNC $guid $serviceTime0")
-              //              HEADERS
-              level1ObjectGuidH       = redirectRes.headers.get(CIString("guid")).map(_.head).get
-              level1ObjectObjectSizeH = redirectRes.headers.get(CIString("Object-Size")).map(_.head).get
-              level1ObjectLevelH      = redirectRes.headers.get(CIString("Level")).map(_.head).get
-              level1ObjectNodeIdH     = redirectRes.headers.get(CIString("Node-Id")).map(_.head).get
-              newHeaders              = Headers(level1ObjectGuidH,level1ObjectObjectSizeH,level1ObjectLevelH,level1ObjectNodeIdH)
-              //            VALUES
-              level1ObjectGuid        = level1ObjectGuidH.value
-              level1ObjectSize        = level1ObjectObjectSizeH.value.toLong
-              _<- ctx.logger.debug("BEFORE PUT!")
-              value                  = ObjectS(
-                guid=level1ObjectGuid,
-//                bytes= level1Bytes,
-                  bytes = rawBytesBuffer,
-//                    fs2.Stream.emits(rawBytes).covary[IO].through(Helpers.streamBytesToBuffer),
-                metadata=Map("objectSize"->level1ObjectSize.toString)
-              )
-              //            PUSH NEW ELEMENT FROM SYNC
-              putResponse            <- cache.put(key=level1ObjectGuid,value=value)
-              asyncEviction          = for {
-                _ <- putResponse.evictedItem match {
-                  case Some(evictedItem) => for {
-                    _         <- ctx.logger.debug(s"EVICTION $evictedItem")
-                    _         <- Helpers.updateStorage(evictedItem,level1ObjectSize)
-                    uploadReq = Request[IO](
-                      method = Method.POST,
-                      uri = Uri.unsafeFromString(s"$oneLevelURL/api/v6/upload"),
-                    )
-                    uploadResponse          <- Helpers.evictedItemRedirectTo(req=uploadReq,oneURL =oneLevelURL,evictedElem= evictedItem , user=user)
-                    _                       <- ctx.logger.debug(s"UPLOAD_RESPONSE $uploadResponse")
-                    updateSchemaReq = Request[IO](
-                      method = Method.POST,
-                      uri = Uri.unsafeFromString(s"$zeroLevelURL/api/v6/update-schema"),
-                      headers = Headers(
-                        Header.Raw(CIString("Evicted-Item-Id"),evictedItem.key),
-                        Header.Raw(CIString("New-Item-Id"),level1ObjectGuid),
-                        Header.Raw(CIString("Node-Id"),currentNodeId),
-                        Header.Raw(CIString("User-Id"),user.id.toString ),
-                        Header.Raw(CIString("Bucket-Id"),user.bucketName),
+//          _            <- ctx.logger.info(s"MISS $guid")
+          _            <- IO.unit
+          filename     = s"${guid}.$objectExt"
+          //          _ <- ctx.logger.debug(s"FILENAME $filename")
+          //       Download cloud
+          cloudStartAt  <- IO.realTime.map(_.toMillis)
+          out           = new ByteArrayOutputStream()
+          elementBytes  <- Dropbox.downloadObject(currentState.dropboxClient)(filename=filename,out=out )
+          cloudEndAt    <- IO.realTime.map(_.toMillis)
+          pullServiceTime = cloudEndAt - cloudStartAt
+          _            <- ctx.logger.info(s"PULL $guid $pullServiceTime")
+          //
+          newObject    = ObjectS(
+            guid= guid.toString,
+            bytes = elementBytes,
+            metadata = Map(
+              "objectSize" ->elementBytes.length.toString,
+              "contentType" -> "application/octet-stream",
+              "extension"  -> objectExt
+            )
+          )
+          //
+          pullEvent = PullEvent(
+            eventId = UUID.randomUUID().toString,
+            serialNumber = 0,
+            nodeId = currentNodeId,
+            objectId = guid.toString,
+            objectSize = elementBytes.length,
+            pullFrom = "Dropbox",
+            milliSeconds = pullServiceTime,
+            timestamp = arrivalTime,
+          )
 
-                      )
-                    )
-                    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
-                    updateSchemaRes    <- client.status(updateSchemaReq)
-                    _                  <- ctx.logger.debug(s"UPDATE_SCHEMA_STATUS $updateSchemaRes")
-                    _                  <- finalizer
-
-                  } yield ()
-                  case None => for {
-                    _ <- ctx.logger.debug("NO-EVICTION")
-                    updateSchemaReq = Request[IO](
-                      method = Method.POST,
-                      uri = Uri.unsafeFromString(s"$zeroLevelURL/api/v6/update-schema"),
-                      headers = Headers(
-                        Header.Raw(CIString("New-Item-Id"),level1ObjectGuid),
-                        Header.Raw(CIString("Node-Id"),currentNodeId),
-                        Header.Raw(CIString("User-Id"),user.id.toString ),
-                        Header.Raw(CIString("Bucket-Id"),user.bucketName),
-
-                      )
-                    )
-                    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
-                    updateSchemaRes    <- client.status(updateSchemaReq)
-                    _                  <- ctx.logger.debug(s"UPDATE_SCHEMA_STATUS $updateSchemaRes")
-                    _                  <- finalizer
-                  } yield ()
-                }
-              } yield ()
-              _ <- asyncEviction.start
-              bytesStream = fs2.Stream.emits(rawBytesBuffer).covary[IO]
-              newResponse <-  Ok(bytesStream,newHeaders)
-          } yield newResponse
-        }
-//        CLOUD AND TRIGGER SYSTEM REP.
-          else {
-            for {
-              _        <- ctx.logger.debug("GO TO CLOUD - TRIGGER SYSTEM REPLICATION")
-              response <- NotFound()
-            } yield response
-          }
+          newHeaders <- Helpers.putInCacheDownload(arrivalTime = arrivalTime,guid= guid.toString,value=newObject,pullEvent= pullEvent)
+//          _ <- ctx.logger.debug(s"OUT_LEN ${out.toByteArray.length}")
+//          _ <- ctx.logger.debug(s"ELEMENT_BYTES ${elementBytes.length}")
+          streamBytes  = fs2.Stream.emits(elementBytes).covary[IO]
+          response <- Ok(streamBytes, newHeaders)
         } yield response
       }
 
-      _ <- ctx.logger.debug("RESPONSE -> "+response.toString)
+//      _ <- ctx.logger.debug("RESPONSE -> "+response.toString)
       _ <- ctx.logger.debug("____________________________________________________")
     } yield response
 

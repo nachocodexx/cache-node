@@ -51,12 +51,12 @@ object Main extends IOApp{
           _               <- Logger[IO].debug(config.toString)
           _               <- Logger[IO].debug(s"CACHE NODE[${config.nodeId}] is up and running 🚀")
           //         __________________________________________________________________________
-          mr                    <- MapRef.ofConcurrentHashMap[IO,String,MemoryCacheItem[Int]](
+          mr                    <- MapRef.ofConcurrentHashMap[IO,String,MemoryCacheItem[ObjectS]](
             initialCapacity = 16,
             loadFactor = 0.75f,
             concurrencyLevel = 16
           )
-          cache                 =  MemoryCache.ofMapRef[IO,String,Int](
+          cache                 =  MemoryCache.ofMapRef[IO,String,ObjectS](
             mr = mr,
             defaultExpiration = None
           )

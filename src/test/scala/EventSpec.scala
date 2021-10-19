@@ -1,6 +1,6 @@
 import cats.implicits._
 import cats.effect._
-import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Put,Pull}
+import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, SetDownloads}
 import mx.cinvestav.events.Events
 import mx.cinvestav.Declarations.Implicits._
 //
@@ -49,27 +49,54 @@ class EventSpec  extends munit .CatsEffectSuite {
       timestamp = 54,
       milliSeconds = 0
     )
+    val baseSetDownloads = SetDownloads(
+      eventId = "",
+      serialNumber = 0,
+      nodeId = "cache-0",
+      objectId = "F1",
+      counter = 0,
+      timestamp = 0,
+      //      eventType = ???,
+      milliSeconds = 0
+    )
+
     val rawEvents = List(
         basePut,
-        baseGet,
-        baseDel,
+        baseGet.copy(objectId = "F0"),
+        baseGet.copy(objectId = "F0"),
         basePut.copy(objectId = "F1"),
-        baseGet.copy(objectId = "F1"),
-        baseGet.copy(objectId = "F1"),
-        basePull,
-        basePut.copy(timestamp = 10),
-        baseGet.copy(timestamp = 11),
-        baseGet.copy(timestamp = 12),
-        baseGet.copy(timestamp = 13),
-        basePut.copy(objectId = "F2",timestamp = 14),
-        baseGet.copy(objectId = "F2",timestamp = 15),
-//        baseGet.copy(objectId = "F2",timestamp = 16),
+        baseDel.copy(objectId = "F1"),
+        basePut.copy(objectId = "F2"),
+
+      //        basePut.copy(objectId = "F2"),
+//        baseGet.copy(objectId = "F1"),
+      //        basePut.copy(objectId = "F2"),
+      //        baseGet,
+//        baseDel,
+//        basePut.copy(objectId = "F1"),
+//        baseGet.copy(objectId = "F1"),
+//        baseGet.copy(objectId = "F1"),
+//        basePull,
+//        basePut.copy(timestamp = 10),
+//        baseGet.copy(timestamp = 11),
+//        baseGet.copy(timestamp = 12),
+//        baseGet.copy(timestamp = 13),
+//        basePut.copy(objectId = "F2",timestamp = 14),
+//        baseGet.copy(objectId = "F2",timestamp = 15),
+//        baseSetDownloads.copy(counter = 10),
+//        baseSetDownloads.copy(counter = 5,objectId = "F2"),
+//        baseGet.copy(objectId = "F1",timestamp = 16),
+
+      //        baseGet.copy(objectId = "F2",timestamp = 16),
 //        baseGet.copy(objectId = "F2",timestamp = 17),
 
     )
     val events = Events.relativeInterpretEvents(rawEvents)
-    val evictedElement0 = Events.LFU(events = events)
-    val evictedElement1 = Events.LRU(events = events)
+//    val x      = Events.getObjectIds(events = events)
+//    println(x)
+//    PUT
+    val evictedElement0 = Events.LFU(events = events,cacheSize = 2)
+    val evictedElement1 = Events.LRU(events = events,cacheSize = 2)
     println(evictedElement0)
     println(evictedElement1)
 

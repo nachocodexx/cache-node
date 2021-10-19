@@ -5,7 +5,7 @@ import cats.effect.std.Queue
 import cats.effect.{IO, Ref}
 import com.dropbox.core.v2.DbxClientV2
 import io.chrisdavenport.mules.MemoryCache
-import mx.cinvestav.commons.events.{Del, Push, Pull => PullEvent}
+import mx.cinvestav.commons.events.{Del, Push, SetDownloads, Pull => PullEvent}
 //import mx.cinvestav.Declarations.{EventX, Get, Put}
 import mx.cinvestav.cache.CacheX.CacheItem
 import mx.cinvestav.commons.events.{EventX, Get, Put}
@@ -38,6 +38,7 @@ object Declarations {
       case del:Del => del.asJson
       case pull:PullEvent => pull.asJson
       case push:Push => push.asJson
+      case st:SetDownloads => st.asJson
       case _ => Json.Null
     }
   }
@@ -175,7 +176,7 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           ip:String = "127.0.0.1",
                           availableResources:Int,
                           totalStorageSpace:Long=1000000000,
-                          cache: MemoryCache[IO,String,Int],
+                          cache: MemoryCache[IO,String,ObjectS],
                           currentEntries:Ref[IO,List[String]],
                           cacheSize:Int,
                           downloadCounter:Int=0,

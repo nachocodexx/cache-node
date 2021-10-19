@@ -47,12 +47,12 @@ object HttpServer {
 
   def authUser()(implicit ctx:NodeContextV6):Kleisli[OptionT[IO,*],Request[IO],User] =
     Kleisli{ req=> for {
-      _          <- OptionT.liftF(ctx.logger.debug("AUTH MIDDLEWARE"))
+      _          <- OptionT.liftF(IO.unit)
       headers    = req.headers
 //      _          <- OptionT.liftF(ctx.logger.debug(headers.headers.mkString(" // ")))
       maybeUserId     = headers.get(ci"User-Id").map(_.head).map(_.value)
       maybeBucketName = headers.get(ci"Bucket-Id").map(_.head).map(_.value)
-      _          <- OptionT.liftF(ctx.logger.debug(maybeUserId.toString+"//"+maybeBucketName.toString))
+//      _          <- OptionT.liftF(ctx.logger.debug(maybeUserId.toString+"//"+maybeBucketName.toString))
       ress            <- (maybeUserId,maybeBucketName) match {
         case (Some(userId),Some(bucketName)) =>   for {
           x  <- OptionT.liftF(User(id = UUID.fromString(userId),bucketName=bucketName  ).pure[IO])

@@ -3,8 +3,22 @@ import cats.Monad
 import cats.data.Chain
 import cats.implicits._
 import cats.effect._
+import mx.cinvestav.commons.events.EventX
+import mx.cinvestav.events.Events
 // A cache is just fast storage.
 object CacheX {
+
+//  def useLFU(events:List[EventX]) =
+
+  def put(events:List[EventX],cacheSize:Int,policy:String="LFU"): Option[String] = {
+    policy match {
+      case  "LFU" => Events.LFU(events = Events.relativeInterpretEvents(events),cacheSize = cacheSize)
+      case "LRU" => Events.LRU(events=Events.relativeInterpretEvents(events),cacheSize = cacheSize)
+      case _ => Events.LFU(events=Events.relativeInterpretEvents(events),cacheSize = cacheSize)
+    }
+  }
+
+
   case class EvictedItem[A](key:String,value:A)
   trait CacheItem[A]{
     def value:A

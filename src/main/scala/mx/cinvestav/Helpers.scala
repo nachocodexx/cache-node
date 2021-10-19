@@ -315,6 +315,7 @@ object Helpers {
     for {
       arrivalTime   <- IO.realTime.map(_.toMillis)
       currentState  <- ctx.state.get
+      currentEvents = currentState.events
       currentLevel  = ctx.config.level
       currentNodeId = ctx.config.nodeId
       cache         = currentState.cacheX

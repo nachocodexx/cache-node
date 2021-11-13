@@ -1,11 +1,24 @@
 package mx.cinvestav.events
 
+import cats.effect.IO
 import cats.implicits._
-import mx.cinvestav.commons.events.EventXOps.OrderOps
-import mx.cinvestav.commons.events.{AddedNode, Del, Downloaded, EventX, EventXOps, Evicted, Get, Pull, Push, Put, RemovedNode, SetDownloads, Uploaded}
+import mx.cinvestav.Declarations.NodeContextV6
+import mx.cinvestav.commons.events.EventXOps.{OrderOps, sequentialMonotonic}
+import mx.cinvestav.commons.events.{AddedNode, Del, Downloaded, EventX, EventXOps, Evicted, Get, Pull, Push, Put, RemovedNode, Uploaded, TransferredTemperature => SetDownloads}
 
 object Events {
 
+  def saveEvents(events:List[EventX])(implicit ctx:NodeContextV6): IO[Unit] = for {
+    currentState     <- ctx.state.get
+    currentEvents    = currentState.events
+    lastSerialNumber = currentEvents.length
+    transformedEvents <- sequentialMonotonic(lastSerialNumber,events=events)
+    _                <- ctx.state.update{ s=>
+      s.copy(events =  s.events ++ transformedEvents )
+    }
+  } yield()
+
+  //
   def alreadyPushedToCloud(objectId:String,events:List[EventX]): Boolean = events.filter {
     case _: Push => true
     case _ => false
@@ -37,28 +50,42 @@ object Events {
   }
 
 
+
+  def relativeInterpretEventsMonotonic(events:List[EventX]):List[EventX] =
+    events.sortBy(_.monotonicTimestamp).reverse.foldLeft(List.empty[EventX]){
+      case (_events,e)=>
+        e match {
+          case del:Del =>
+            _events.filterNot {
+              case _del:Del => _del.objectId == del.objectId && _del.monotonicTimestamp < del.monotonicTimestamp
+              case _get:Get => _get.objectId == del.objectId && _get.monotonicTimestamp < del.monotonicTimestamp
+              case _put:Put => _put.objectId == del.objectId && _put.monotonicTimestamp < del.monotonicTimestamp
+              case _ => false
+            }
+          case  _ => _events :+  e
+        }
+    }
   def relativeInterpretEvents(events:List[EventX]):List[EventX] =
     OrderOps.byTimestamp(events).reverse.foldLeft(List.empty[EventX]){
       case (_events,e)=>
         e match {
-          case _@Del(_, _, _, objectId,_,timestamp,_,_) =>
+          case del:Del =>
             _events.filterNot {
-              case _del:Del => _del.objectId == objectId && _del.timestamp < timestamp
-              case _get:Get => _get.objectId == objectId && _get.timestamp < timestamp
-              case _put:Put => _put.objectId == objectId && _put.timestamp < timestamp
+              case _del:Del => _del.objectId == del.objectId && _del.timestamp < del.timestamp
+              case _get:Get => _get.objectId == del.objectId && _get.timestamp < del.timestamp
+              case _put:Put => _put.objectId == del.objectId && _put.timestamp < del.timestamp
               case _ => false
 //              case _ => false
             }
-          case  _:Uploaded | _:Downloaded | _: AddedNode | _: RemovedNode | _: Get | _:Put | _:Pull | _:Evicted | _:Push | _:SetDownloads =>
-            _events :+  e
+          case  _ => _events :+  e
 //          case _ => _events
         }
     }
 
 
   def getHitCounter(events:List[EventX]): Map[String, Int] = {
-    val objectsIds                = getObjectIds(events = events)
-    val downloadObjectInitCounter = objectsIds.map(x=> x -> 0).toMap
+//    val objectsIds                = getObjectIds(events = events)
+//    val downloadObjectInitCounter = objectsIds.map(x=> x -> 0).toMap
     val filtered =  events.filter{
       case _:Get | _:SetDownloads => true
       case _ => false
@@ -80,15 +107,14 @@ object Events {
 //      }
     filtered
   }
-
-
+//
+//  __________________________________________________________________
   def LFU(events:List[EventX],cacheSize:Int = 3): Option[String] = {
       val initObjectIdCounter = Events.getObjectIds(events = events)
       val x =  initObjectIdCounter.map(x=>x->0).toMap|+|Events.getHitCounter(events = events)
-//      println(x,x.size)
-      if(x.size == cacheSize)
-        x.minByOption(_._2).map(_._1)
-      else None
+      println(x,x.size)
+      if(x.size < cacheSize) None
+      else x.minByOption(_._2).map(_._1)
   }
   def LRU(events:List[EventX],cacheSize:Int=3): Option[String] =  {
 //    val x= EventXOps.OrderOps.byTimestamp(EventXOps.onlyGets(events = events)).map(_.asInstanceOf[Get]).map(_.objectId).distinct

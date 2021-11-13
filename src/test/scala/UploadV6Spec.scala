@@ -178,13 +178,13 @@ class UploadV6Spec extends munit .CatsEffectSuite {
     resourceClient.use{ client => for {
       _      <- IO.unit
       trace  = NonEmptyList.of[RequestX](
-//        RequestX(Upload,500,uploadRequest(4000,pdf0Multipart,0)),
+        RequestX(Upload,500,uploadRequest(4000,pdf0Multipart,0)),
 //        RequestX(Upload,500,replicationRequest(4000,pdf0Id) ),
 //        RequestX(Upload,1000,uploadRequest(4000,pdf1Multipart,0)),
 //        RequestX(Upload,1000,uploadRequest(4000,video0Multipart,1)),
 //      ____________________________________________________________
-        RequestX(Download,1000,downloadRequest(4001,pdf0Id)),
-        RequestX(Download,1500,downloadRequest(4002,pdf0Id)),
+//        RequestX(Download,1000,downloadRequest(4001,pdf0Id)),
+//        RequestX(Download,1500,downloadRequest(4002,pdf0Id)),
 //       ____________________________________________________________
 //        RequestX(Upload,1000,uploadRequest(4000,pdf2Multipart,0)),
 //          RequestX(Upload,2000,flushAllRequest(4000,0)),

@@ -12,9 +12,9 @@ object CacheX {
 
   def put(events:List[EventX],cacheSize:Int,policy:String="LFU"): Option[String] = {
     policy match {
-      case  "LFU" => Events.LFU(events = Events.relativeInterpretEvents(events),cacheSize = cacheSize)
-      case "LRU" => Events.LRU(events=Events.relativeInterpretEvents(events),cacheSize = cacheSize)
-      case _ => Events.LFU(events=Events.relativeInterpretEvents(events),cacheSize = cacheSize)
+      case  "LFU" => Events.LFU(events = events,cacheSize = cacheSize)
+      case "LRU" => Events.LRU(events=events,cacheSize = cacheSize)
+      case _ => Events.LFU(events=events,cacheSize = cacheSize)
     }
   }
 

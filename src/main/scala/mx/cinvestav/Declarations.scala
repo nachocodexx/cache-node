@@ -1,11 +1,11 @@
 package mx.cinvestav
 
 import cats.data.EitherT
-import cats.effect.std.Queue
+import cats.effect.std.{Queue, Semaphore}
 import cats.effect.{IO, Ref}
 import com.dropbox.core.v2.DbxClientV2
 import io.chrisdavenport.mules.MemoryCache
-import mx.cinvestav.commons.events.{Del, Push, SetDownloads, Pull => PullEvent}
+import mx.cinvestav.commons.events.{Del, ObjectHashing, Push, Pull => PullEvent, TransferredTemperature => SetDownloads}
 //import mx.cinvestav.Declarations.{EventX, Get, Put}
 import mx.cinvestav.cache.CacheX.CacheItem
 import mx.cinvestav.commons.events.{EventX, Get, Put}
@@ -33,14 +33,20 @@ object Declarations {
 //
   object Implicits {
     implicit val eventXEncoder: Encoder[EventX] = {
-      case get:Get => get.asJson
       case put:Put => put.asJson
+      case get:Get => get.asJson
       case del:Del => del.asJson
       case pull:PullEvent => pull.asJson
       case push:Push => push.asJson
-      case st:SetDownloads => st.asJson
+      case transferredTemperature:SetDownloads => transferredTemperature.asJson
+      case transferredTemperature:ObjectHashing => transferredTemperature.asJson
       case _ => Json.Null
     }
+  implicit val objectSEncoder: (String)=>Encoder[CacheItem[ObjectS]] = policy => (a: CacheItem[ObjectS]) => Json.obj(
+    ("guid" -> a.value.guid.asJson),
+    if (policy == "LFU") ("hits" -> a.counter.asJson) else ("sequence_number" -> a.counter.asJson),
+    ("metadata" -> a.value.metadata.asJson)
+  )
   }
   case class ObjectX(guid:String,bytes:Array[Byte],metadata:Map[String,String])
   case class ObjectS(guid:String,
@@ -49,14 +55,17 @@ object Declarations {
 //                     bytes:fs2.Stream[IO,ByteArrayOutputStream],
                      metadata:Map[String,String]
                     )
+
+  case class PushResponse(
+                           nodeId:String,
+                           userId:String,
+                           guid:String,
+                           objectSize:Long,
+                           serviceTimeNanos:Long,
+                           timestamp:Long,
+                           level:Int
+                         )
   //
-  implicit val objectSEncoder: (String)=>Encoder[CacheItem[ObjectS]] = policy =>new Encoder[CacheItem[ObjectS]] {
-    override def apply(a: CacheItem[ObjectS]): Json = Json.obj(
-      ("guid"->a.value.guid.asJson),
-        if(policy=="LFU") ("hits"->a.counter.asJson) else ("sequence_number"->a.counter.asJson),
-          ("metadata"->a.value.metadata.asJson)
-    )
-  }
 //
   case class User(id:UUID,bucketName:String)
 //
@@ -133,6 +142,7 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
   case class NodeContextV6(
                             config: DefaultConfigV5,
                             logger: Logger[IO],
+                            errorLogger:Logger[IO],
                             state:Ref[IO,NodeStateV6],
                           )
   case class NodeContextV5(
@@ -186,6 +196,7 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           dropboxClient:DbxClientV2,
 //
                           events:List[EventX] =Nil,
+                          s:Semaphore[IO]
                         )
   case class NodeStateV5(
                           levelId:String,

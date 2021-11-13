@@ -1,5 +1,6 @@
 import cats.effect.IO
 import cats.implicits._
+import com.dropbox.core.v2.files.Metadata
 import fs2.io.file.Files
 import mx.cinvestav.clouds.Dropbox
 
@@ -14,6 +15,8 @@ import com.dropbox.core.v2.DbxClientV2
 import com.dropbox.core.v2.users.FullAccount
 import java.io.FileInputStream
 import java.io.InputStream
+import scala.collection.JavaConverters._
+
 //
 class DropboxSpec extends munit .CatsEffectSuite {
   final val ACCESS_TOKEN = "6n9TxLVwdIIAAAAAAAAAAYV7zgDdr3XQmf9QTgfdswVNM6RFGjH-Z9wDw9RQlMie"
@@ -24,6 +27,9 @@ class DropboxSpec extends munit .CatsEffectSuite {
   test("Basics"){
     val config = DbxRequestConfig.newBuilder("cinvestav-cloud-test/1.0.0").build
     val client = new DbxClientV2(config, ACCESS_TOKEN)
+    val x = client.files().listFolder("")
+    val y = x.getEntries.asScala.toList.map(_.getName)
+    println(y)
     // Upload "test.txt" to Dropbox// Upload "test.txt" to Dropbox
 //    val in = new FileInputStream(s"$SOURCE_PATH/0.pdf")
 //
@@ -38,8 +44,8 @@ class DropboxSpec extends munit .CatsEffectSuite {
     //    DOWNLOAD
     val downloadFileStream:ByteArrayOutputStream = new ByteArrayOutputStream()
 //    val bytes =
-      Dropbox.downloadObject(dbxClientV2 = client)("0.pdf",downloadFileStream)
-      .flatMap(x=>IO.println("BYTES_LEN "+x.length))
+//      Dropbox.downloadObject(dbxClientV2 = client)("0.pdf",downloadFileStream)
+//      .flatMap(x=>IO.println("BYTES_LEN "+x.length))
 //    val metadata = client.files().downloadBuilder("/0.pdf").download(downloadFileStream)
 //    downloadFileStream.close()
 //    println(downloadFileStream.toByteArray.length)

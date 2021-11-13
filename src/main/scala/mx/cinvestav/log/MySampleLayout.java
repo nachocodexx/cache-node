@@ -34,6 +34,8 @@ public class MySampleLayout extends LayoutBase<ILoggingEvent> {
             sbuf
                     .append(elapsedTime)
                     .append(" ")
+                    .append(nodeId)
+                    .append(" ")
                     .append(message)
                     .append(" ")
                     .append(CoreConstants.LINE_SEPARATOR);

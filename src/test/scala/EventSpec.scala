@@ -1,6 +1,6 @@
 import cats.implicits._
 import cats.effect._
-import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, SetDownloads}
+import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, TransferredTemperature=>SetDownloads}
 import mx.cinvestav.events.Events
 import mx.cinvestav.Declarations.Implicits._
 //
@@ -19,7 +19,7 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F0",
       objectSize = 1000,
       timestamp = 0,
-      milliSeconds = 0
+      serviceTimeNanos = 0
     )
     val baseGet = Get(
       eventId = "event-1",
@@ -28,7 +28,7 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F0",
       objectSize = 1000,
       timestamp = 1,
-      milliSeconds = 0
+      serviceTimeNanos = 0
     )
     val baseDel = Del(
       eventId = "event-2",
@@ -37,7 +37,7 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F0",
       objectSize = 1000,
       timestamp = 3,
-      milliSeconds = 0
+      serviceTimeNanos = 0L
     )
     val basePull = Pull(
       eventId = "event-4",
@@ -47,7 +47,7 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectSize = 1000 ,
       pullFrom = "Dropbox",
       timestamp = 54,
-      milliSeconds = 0
+      serviceTimeNanos = 0L
     )
     val baseSetDownloads = SetDownloads(
       eventId = "",
@@ -56,8 +56,7 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F1",
       counter = 0,
       timestamp = 0,
-      //      eventType = ???,
-      milliSeconds = 0
+      serviceTimeNanos = 0L
     )
 
     val rawEvents = List(

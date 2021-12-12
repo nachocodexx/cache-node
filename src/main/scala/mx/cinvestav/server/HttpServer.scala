@@ -1,5 +1,6 @@
 package mx.cinvestav.server
 
+import cats.effect.std.Semaphore
 import fs2.io.file.Files
 import mx.cinvestav.{Declarations, Helpers}
 import mx.cinvestav.Declarations.{NodeContextV6, ObjectS}
@@ -55,20 +56,20 @@ object HttpServer {
 
 
 
-  private def httpApp()(implicit ctx:NodeContextV6): Kleisli[IO, Request[IO],
+  private def httpApp(dSemaphore:Semaphore[IO])(implicit ctx:NodeContextV6): Kleisli[IO, Request[IO],
     Response[IO]] =
     Router[IO](
-      "/api/v6" -> AuthMiddlewareX(ctx=ctx)(RouteV6()),
+      "/api/v6" -> AuthMiddlewareX(ctx=ctx)(RouteV6(dSemaphore)),
       "/pull" -> PullController(),
       "/api/v6/stats" ->StatsController(),
       "/api/v6/events" -> EventsController()
     ).orNotFound
 
-  def run()(implicit ctx:NodeContextV6): IO[Unit] = for {
+  def run(dSemaphore:Semaphore[IO])(implicit ctx:NodeContextV6): IO[Unit] = for {
     _ <- ctx.logger.debug(s"HTTP SERVER AT ${ctx.config.host}:${ctx.config.port}")
     _ <- BlazeServerBuilder[IO](executionContext = global)
     .bindHttp(ctx.config.port,ctx.config.host)
-    .withHttpApp(httpApp = httpApp())
+    .withHttpApp(httpApp = httpApp(dSemaphore))
     .serve
     .compile
     .drain

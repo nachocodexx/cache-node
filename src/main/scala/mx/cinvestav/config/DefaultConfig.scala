@@ -13,7 +13,9 @@ import mx.cinvestav.commons.types.ObjectMetadata
 import org.http4s.circe.CirceEntityCodec.{circeEntityDecoder, circeEntityEncoder}
 import org.http4s.{Header, Headers, MediaType, Method, Request, Status, Uri}
 import mx.cinvestav.Implicits._
+import mx.cinvestav.commons.events.{Del, Evicted}
 import mx.cinvestav.commons.payloads.AddCacheNode
+import org.http4s.client.Client
 import org.typelevel.ci.CIString
 
 case class ChordGetResponse(
@@ -82,10 +84,37 @@ case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:
 case class Pool(hostname:String,port:Int) {
   def httpURL = s"http://$hostname:$port"
   def addNodeUri = s"http://$hostname:$port/api/v6/add-node"
-  def addNode(payload:AddCacheNode)(implicit ctx:NodeContextV6) = for {
+  def evictedUri = s"http://$hostname:$port/api/v7/evicted"
+  def monirotingUrl(nodeId:String) = s"$httpURL/api/v7/monitoring/$nodeId"
+
+  def sendEvicted(payload:Del)(implicit ctx:NodeContextV6) = for {
+    timestamp          <- IO.realTime.map(_.toMillis)
+    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
+    evicted            = Evicted(
+      serialNumber = payload.serialNumber,
+      nodeId = payload.nodeId,
+      objectId = payload.objectId,
+      objectSize = payload.objectSize,
+      fromNodeId = payload.nodeId,
+      timestamp = payload.timestamp,
+      serviceTimeNanos = payload.serviceTimeNanos,
+      eventId = payload.eventId,
+      monotonicTimestamp = 0,
+      correlationId = payload.correlationId
+    )
+    _ <- ctx.logger.debug(s"REQUES_URI ${this.evictedUri}")
+    req                = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(this.evictedUri)
+    ).withEntity(evicted.asJson)
+    status             <- client.status(req)
+    _                  <- ctx.logger.debug(s"EVICTED_STATUS $status")
+    _                  <- finalizer
+  }  yield ()
+  def addNode(client:Client[IO])(payload:AddCacheNode)(implicit ctx:NodeContextV6) = for {
     timestamp          <- IO.realTime.map(_.toMillis)
 //    _                  <- ctx.logger.debug("ADD_NODE")
-    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
+//    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
     req                = Request[IO](
       method = Method.POST,
       uri = Uri.unsafeFromString(this.addNodeUri)
@@ -95,7 +124,7 @@ case class Pool(hostname:String,port:Int) {
       )
     status             <- client.status(req)
     _                  <- ctx.logger.debug(s"STATUS $status")
-    _                  <- finalizer
+//    _                  <- finalizer
   }  yield ()
 }
 
@@ -118,7 +147,8 @@ case class DefaultConfigV5(
                             syncNodes:List[String],
                             clouds:List[String],
                             level:Int=0,
-                            pool:Pool
+                            pool:Pool,
+                            cloudEnabled:Boolean=false,
                             //                          sourceFolders:List[String]
                         )
 

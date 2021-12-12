@@ -20,7 +20,8 @@
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
-        <file>${LOG_PATH}/${NODE_ID}-${bySecond}.txt</file>
+<!--        <file>${LOG_PATH}/${NODE_ID}-${bySecond}.txt</file>-->
+        <file>${LOG_PATH}/${NODE_ID}.txt</file>
         <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
             <layout class="mx.cinvestav.log.MySampleLayout" >
                 <nodeId>${NODE_ID}</nodeId>

@@ -6,7 +6,11 @@ import cats.effect.{ExitCode, IO, IOApp}
 import com.dropbox.core.DbxRequestConfig
 import com.dropbox.core.v2.DbxClientV2
 import mx.cinvestav.Declarations.{NodeContextV6, NodeStateV6}
+import mx.cinvestav.monitoring.Monitoring
+import org.http4s.blaze.client.BlazeClientBuilder
 import retry._
+
+import scala.concurrent.ExecutionContext.global
 //org.http4s.client.middleware.RetryPolicy
 //
 import dev.profunktor.fs2rabbit.config.Fs2RabbitConfig
@@ -61,6 +65,7 @@ object Main extends IOApp{
            dbxConfig = DbxRequestConfig.newBuilder("cinvestav-cloud-test/1.0.0").build
            dbxClient = new DbxClientV2(dbxConfig, config.dropboxAccessToken)
            semaphore <- Semaphore[IO](1)
+          dSemaphore <- Semaphore[IO](1)
           _initState      = NodeStateV6(
             levelId               = if(config.level==0) "LOCAL" else "SYNC",
             status                = status.Up,
@@ -73,7 +78,7 @@ object Main extends IOApp{
             queue                 = queue,
             cacheX                = if(config.cachePolicy=="LRU") LRU[IO,ObjectS](config.cacheSize) else LFU[IO,ObjectS](config.cacheSize),
             dropboxClient         =  dbxClient,
-            s                     = semaphore
+            s                     = semaphore,
           )
           state           <- IO.ref(_initState)
           //        __________________________________________________________________________
@@ -96,14 +101,16 @@ object Main extends IOApp{
             usedMemoryCapacity = 0L
           )
 //         _ <- ctx.config.loadBalancer.zero.addNode(addNodePayload)(ctx=ctx)
+          (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
           retryPolicy = RetryPolicies.exponentialBackoff[IO](1 seconds)
-          connectToMid = ctx.config.pool.addNode(addNodePayload)(ctx=ctx)
+          connectToMid = ctx.config.pool.addNode(client)(addNodePayload)(ctx=ctx)
           connectToMidWithRetry <- retryingOnAllErrors[Unit](
             policy = retryPolicy,
             onError = (e:Throwable,details:RetryDetails)=>ctx.logger.error(e.getMessage) *> ctx.logger.debug(s"RETRY_DETAILS $details")
           )(connectToMid)
-
-          _ <- HttpServer.run()(ctx=ctx)
+          _ <- Monitoring.run(client)(ctx).compile.drain.start
+          _ <- HttpServer.run(dSemaphore)(ctx=ctx)
+          _ <- finalizer
         } yield ExitCode.Success
       }
 //    }

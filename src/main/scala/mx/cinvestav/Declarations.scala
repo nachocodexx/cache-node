@@ -47,6 +47,13 @@ object Declarations {
     if (policy == "LFU") ("hits" -> a.counter.asJson) else ("sequence_number" -> a.counter.asJson),
     ("metadata" -> a.value.metadata.asJson)
   )
+  implicit val objectSEncoderv2: Encoder[ObjectS] = (a: ObjectS) => Json.obj(
+    ("guid" -> a.guid.asJson),
+    ("size"-> a.bytes.length.asJson),
+    ("metadata"->a.metadata.asJson)
+//    if (policy == "LFU") ("hits" -> a.counter.asJson) else ("sequence_number" -> a.counter.asJson),
+//    ("metadata" -> a.value.metadata.asJson)
+  )
   }
   case class ObjectX(guid:String,bytes:Array[Byte],metadata:Map[String,String])
   case class ObjectS(guid:String,
@@ -67,7 +74,7 @@ object Declarations {
                          )
   //
 //
-  case class User(id:UUID,bucketName:String)
+  case class User(id:String,bucketName:String)
 //
   def liftFF[A]: IO[A] => EitherT[IO, NodeError, A] =  commons.liftFF[A,NodeError]
 //
@@ -196,7 +203,8 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           dropboxClient:DbxClientV2,
 //
                           events:List[EventX] =Nil,
-                          s:Semaphore[IO]
+                          s:Semaphore[IO],
+//                          downloadSemaphore:Semaphore[IO]
                         )
   case class NodeStateV5(
                           levelId:String,

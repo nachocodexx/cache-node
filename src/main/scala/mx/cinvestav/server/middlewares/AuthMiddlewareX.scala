@@ -22,14 +22,14 @@ object AuthMiddlewareX {
       //      _          <- OptionT.liftF(ctx.logger.debug(maybeUserId.toString+"//"+maybeBucketName.toString))
       ress            <- (maybeUserId,maybeBucketName) match {
         case (Some(userId),Some(bucketName)) =>   for {
-          x  <- OptionT.liftF(User(id = UUID.fromString(userId),bucketName=bucketName  ).pure[IO])
+          x  <- OptionT.liftF(User(id = userId,bucketName=bucketName  ).pure[IO])
           //          _  <- OptionT.liftF(ctx.logger.debug("AUTHORIZED"))
         } yield x
-        case (Some(_),None) => OptionT.liftF(User(id = UUID.fromString("b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75"),bucketName="DEFAULT"  ).pure[IO])
+        case (Some(_),None) => OptionT.liftF(User(id = "b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75",bucketName="DEFAULT"  ).pure[IO])
         //          OptionT.none[IO,User]
-        case (None,Some(_)) => OptionT.liftF(User(id = UUID.fromString("b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75"),bucketName="DEFAULT"  ).pure[IO])
+        case (None,Some(_)) => OptionT.liftF(User(id = "b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75",bucketName="DEFAULT"  ).pure[IO])
         //          OptionT.none[IO,User]
-        case (None,None )   => OptionT.liftF(User(id = UUID.fromString("b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75"),bucketName="DEFAULT"  ).pure[IO])
+        case (None,None )   => OptionT.liftF(User(id = "b952f36e-e2f4-4b5a-93f1-e6d3af1b9c75",bucketName="DEFAULT"  ).pure[IO])
         //          OptionT.none[IO,User]
       }
 

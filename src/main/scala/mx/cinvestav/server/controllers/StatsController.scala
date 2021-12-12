@@ -1,9 +1,11 @@
 package mx.cinvestav.server.controllers
 
+import cats.implicits._
 import cats.effect.IO
 import mx.cinvestav.Declarations.NodeContextV6
 import mx.cinvestav.commons.events.EventXOps
 import mx.cinvestav.events.Events
+import mx.cinvestav.Declarations.Implicits.objectSEncoderv2
 //
 import org.http4s.HttpRoutes
 import org.http4s.dsl.io._
@@ -27,6 +29,9 @@ object StatsController {
         usedCapacity  = EventXOps.calculateUsedCapacity(filteredEvents)
         totalCapacity = ctx.config.totalStorageCapacity
         availableCapacity = totalCapacity-usedCapacity
+        maybeObject     = Events.getObjectIds(events = filteredEvents)
+        os <- maybeObject.traverse(o=>currentState.cache.lookup(o)).map(_.flatten)
+//          .traverse(currentState.cache.lookup).map(_.flatten)
         //          data         = filteredEvents.
         payloadRes   = Map(
           "nodeId" -> ctx.config.nodeId.asJson,
@@ -36,8 +41,9 @@ object StatsController {
           "totalStorageCapacity" -> totalCapacity.asJson,
           "usedStorageCapacity" -> usedCapacity.asJson,
           "availableStorageCapacity" -> availableCapacity.asJson,
-          //            "events"->filteredEvents.asJson,
-          "timestamp" -> timestamp.asJson
+          "timestamp" -> timestamp.asJson,
+          "objects" -> os.asJson
+//            maybeObject.asJson
         ).asJson
         response <- Ok(payloadRes)
       } yield response

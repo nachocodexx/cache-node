@@ -112,7 +112,6 @@ object Events {
   def LFU(events:List[EventX],cacheSize:Int = 3): Option[String] = {
       val initObjectIdCounter = Events.getObjectIds(events = events)
       val x =  initObjectIdCounter.map(x=>x->0).toMap|+|Events.getHitCounter(events = events)
-      println(x,x.size)
       if(x.size < cacheSize) None
       else x.minByOption(_._2).map(_._1)
   }

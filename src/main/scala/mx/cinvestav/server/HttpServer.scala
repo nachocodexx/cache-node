@@ -10,7 +10,7 @@ import mx.cinvestav.clouds.Dropbox
 import mx.cinvestav.commons.events
 import mx.cinvestav.commons.events.{Del, Get, Push, Put}
 import mx.cinvestav.commons.types.ObjectLocation
-import mx.cinvestav.server.controllers.{EventsController, PullController, StatsController}
+import mx.cinvestav.server.controllers.{EventsController, PullController, ResetController, StatsController}
 import mx.cinvestav.server.middlewares.AuthMiddlewareX
 
 import java.io.ByteArrayInputStream
@@ -62,7 +62,8 @@ object HttpServer {
       "/api/v6" -> AuthMiddlewareX(ctx=ctx)(RouteV6(dSemaphore)),
       "/pull" -> PullController(),
       "/api/v6/stats" ->StatsController(),
-      "/api/v6/events" -> EventsController()
+      "/api/v6/events" -> EventsController(),
+      "/api/v6/reset" -> ResetController()
     ).orNotFound
 
   def run(dSemaphore:Semaphore[IO])(implicit ctx:NodeContextV6): IO[Unit] = for {

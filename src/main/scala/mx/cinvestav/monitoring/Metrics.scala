@@ -22,9 +22,8 @@ object Metrics {
   }
   def getRAMInfo: RAMInfo = {
     val osMXBean = ManagementFactory.getOperatingSystemMXBean.asInstanceOf[OperatingSystemMXBean]
-    val totalRAM = osMXBean.getTotalPhysicalMemorySize.toDouble
-//    osMXBean.getFreeMe
-    val freeRAM  = osMXBean.getFreePhysicalMemorySize.toDouble
+    val totalRAM = osMXBean.getTotalMemorySize.toDouble
+    val freeRAM  = osMXBean.getFreeMemorySize.toDouble
     val usedRAM  = totalRAM-freeRAM
     RAMInfo(totalRAM,freeRAM,usedRAM)
   }

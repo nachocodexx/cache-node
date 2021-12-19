@@ -79,6 +79,7 @@ object Main extends IOApp{
             cacheX                = if(config.cachePolicy=="LRU") LRU[IO,ObjectS](config.cacheSize) else LFU[IO,ObjectS](config.cacheSize),
             dropboxClient         =  dbxClient,
             s                     = semaphore,
+            experimentId          =  config.experimentId
           )
           state           <- IO.ref(_initState)
           //        __________________________________________________________________________

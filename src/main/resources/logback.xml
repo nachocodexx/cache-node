@@ -34,7 +34,7 @@
 
     <appender name="ERROR-FILE" class="ch.qos.logback.core.FileAppender">
 <!--        <file>error-.log</file>-->
-        <file>${LOG_PATH}/${NODE_ID}-error}.txt</file>
+        <file>${LOG_PATH}/error/${NODE_ID}-error}.txt</file>
         <append>true</append>
         <encoder>
             <pattern>%-4relative [%thread] %-5level %logger{35} - %msg %n</pattern>

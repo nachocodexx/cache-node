@@ -13,12 +13,12 @@ import scala.concurrent.duration._
 import language.postfixOps
 
 object Monitoring {
-  def run(client:Client[IO])(implicit ctx:NodeContextV6) = Stream.awakeEvery[IO](1 second).flatMap{ _=>
+  def run(client:Client[IO])(implicit ctx:NodeContextV6) = Stream.awakeEvery[IO](ctx.config.monitoringDelayMs milliseconds).flatMap{ _=>
     for {
       _             <- Stream.eval(IO.unit)
       monitoringUrl = ctx.config.pool.monirotingUrl(ctx.config.nodeId)
       ramInfo       = Metrics.getRAMInfo.toMB
-      jvmRamInfo = Metrics.getJVMMemoryInfo.toMB
+      jvmRamInfo    = Metrics.getJVMMemoryInfo.toMB
       systemCpu     = Metrics.getSystemCPU()
       cpu           = Metrics.getCPU()
       ufRAM         = Metrics.getUfRAM()

@@ -201,9 +201,9 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           queue:Queue[IO,RequestX],
                           cacheX:ICache[IO,ObjectS],
                           dropboxClient:DbxClientV2,
-//
                           events:List[EventX] =Nil,
                           s:Semaphore[IO],
+                          experimentId:String
 //                          downloadSemaphore:Semaphore[IO]
                         )
   case class NodeStateV5(
@@ -231,6 +231,7 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
                           queue:Queue[IO,RequestX],
                           currentOperationId:Option[Int],
-                          cacheX:ICache[IO,ObjectS]
+                          cacheX:ICache[IO,ObjectS],
+                          experimentId:String
                       )
 }

@@ -149,6 +149,8 @@ case class DefaultConfigV5(
                             level:Int=0,
                             pool:Pool,
                             cloudEnabled:Boolean=false,
+                            monitoringDelayMs:Long,
+                            experimentId:String
                             //                          sourceFolders:List[String]
                         )
 

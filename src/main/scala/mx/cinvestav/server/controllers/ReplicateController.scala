@@ -26,8 +26,7 @@ object ReplicateController {
         //
         replicationStrategy  = headers.get(CIString("Replication-Strategy")).map(_.head.value).getOrElse("ACTIVE")
         replicationFactor    = headers.get(CIString("Replication-Factor")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
-        replicaNodes         = headers.get(CIString("Replica-Node")).map(_.map(_.value))
-        //
+        replicaNodes         = headers.get(CIString("Replica-Node")).map(x=>x.map(_.value).toList ).getOrElse(List.empty[String])
         _                    <- ctx.logger.debug(s"REPLICATION_STRATEGY $replicationStrategy")
         _                    <- ctx.logger.debug(s"REPLICATION_FACTOR $replicationFactor")
         _                    <- ctx.logger.debug(s"REPLICA_NODES $replicaNodes")
@@ -49,8 +48,8 @@ object ReplicateController {
                 ),
                 body    =  streamBytes
               )))
-              requests      = replicaNodes.map{ urls =>
-                urls.map( url =>
+              requests      = replicaNodes.map{ url =>
+//                urls.map( url =>
                   Request[IO](
                     method  = Method.POST,
                     uri     = Uri.unsafeFromString(url),
@@ -63,10 +62,10 @@ object ReplicateController {
                         Header.Raw(CIString("Bucket-Id"),user.bucketName)
                       ),
                     )
-                )
+//                )
               }
               (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
-              responses          <- requests.traverse(_.traverse(req=>client.toHttpApp.run(req)))
+              responses          <- requests.traverse(req=>client.toHttpApp.run(req))
               _                  <- ctx.logger.debug(responses.toString)
               _                  <- finalizer
               res                <- Ok("")

@@ -33,9 +33,13 @@ object PullController {
     currentNodeId    = ctx.config.nodeId
     headers          = req.headers
     pullFromURL      = headers.get(CIString("Pull-From")).map(_.map(_.value)).get.head
+    operationId      = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse("")
     request         = Request[IO](
         method = Method.GET,
-        uri = Uri.unsafeFromString(pullFromURL)
+        uri = Uri.unsafeFromString(pullFromURL),
+        headers = Headers(
+          Header.Raw(CIString("Operation-Id"),operationId)
+        )
       )
     // ________________________________________________-
     (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated

@@ -5,29 +5,22 @@ import com.sun.management.OperatingSystemMXBean
 
 import java.lang.management.ManagementFactory
 import mx.cinvestav.commons.balancer.v3.UF
+import mx.cinvestav.commons.types.Monitoring.MemoryInfo
 
 object Metrics {
-  object Implicits{
-    implicit class BytesToMBConverter(bytes:Double) {
-      def toMB = bytes/math.pow(1024,2)
-    }
-    implicit class BytesToMBConverterLong(bytes:Long) {
-      def toMB = bytes/math.pow(1024,2)
-    }
-  }
 
-  import Implicits._
-  case class RAMInfo(total:Double,free:Double,used:Double) {
-    def toMB = RAMInfo(total.toMB,free.toMB,used.toMB)
-  }
-  def getRAMInfo: RAMInfo = {
+//  import Implicits._
+//  case class RAMInfo(total:Double,free:Double,used:Double) {
+//    def toMB = RAMInfo(total.toMB,free.toMB,used.toMB)
+//  }
+  def getRAMInfo: MemoryInfo = {
     val osMXBean = ManagementFactory.getOperatingSystemMXBean.asInstanceOf[OperatingSystemMXBean]
     val totalRAM = osMXBean.getTotalMemorySize.toDouble
     val freeRAM  = osMXBean.getFreeMemorySize.toDouble
     val usedRAM  = totalRAM-freeRAM
-    RAMInfo(totalRAM,freeRAM,usedRAM)
+    MemoryInfo(totalRAM,freeRAM,usedRAM)
   }
-  def getJVMMemoryInfo: RAMInfo ={
+  def getJVMMemoryInfo: MemoryInfo ={
     val runtime    = Runtime.getRuntime
     //    Total designated memory, this will equal the configured -Xmx value
     val maxMemory  = runtime.maxMemory()
@@ -40,7 +33,7 @@ object Metrics {
     //  Total free memory, has to be calculated: maxMemory - usedMemory
     val totalFreeMemory = maxMemory - usedMemory
 //    val used       = maxMemory - free
-    RAMInfo(total=maxMemory,free=totalFreeMemory,used= usedMemory)
+    MemoryInfo(total=maxMemory,free=totalFreeMemory,used= usedMemory)
   }
   def getUFJVMMemory(x:Double=0)={
     val ramInfo  = getJVMMemoryInfo
@@ -50,7 +43,7 @@ object Metrics {
     val ramInfo  = getRAMInfo
     UF.calculate(ramInfo.total,ramInfo.used,x)
   }
-  def getUfRAMGen(ramInfo:RAMInfo,x:Double=0.0):Double = UF.calculate(ramInfo.total,ramInfo.used,x)
+  def getUfRAMGen(ramInfo:MemoryInfo,x:Double=0.0):Double = UF.calculate(ramInfo.total,ramInfo.used,x)
 
 
   def getCPU():Double = {

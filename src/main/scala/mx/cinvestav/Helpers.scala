@@ -1,49 +1,23 @@
 package mx.cinvestav
-import cats.effect.kernel.Outcome
-
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, File}
-import java.net.URL
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import cats.implicits._
 import cats.effect.{IO, Ref}
 import com.dropbox.core.v2.files.FileMetadata
-import com.github.gekomad.scalacompress.CompressionStats
-import dev.profunktor.fs2rabbit.model.AmqpFieldValue.StringVal
-import dev.profunktor.fs2rabbit.model.{AMQPChannel, AmqpMessage, AmqpProperties, ExchangeName, ExchangeType, RoutingKey}
-import fs2.Pipe
 import fs2.io.file.Files
-import mx.cinvestav.Declarations.{CacheTransaction, CommandIds, DownloadError, NodeContextV5, NodeContextV6, ObjectS, Payloads, ProposedElement, StorageNode, User, liftFF}
-import mx.cinvestav.cache.cache.{CachePolicy, EvictedItem}
-import mx.cinvestav.cache.CacheX.{EvictedItem => EvictedItemV2}
+import mx.cinvestav.Declarations.NodeContextV6
 import mx.cinvestav.clouds.Dropbox
-import mx.cinvestav.commons.compression
-import mx.cinvestav.commons.events.{Del, EventX, Get, Push, Put, Pull => PullEvent}
+import mx.cinvestav.commons.events.{EventX,Push}
 import mx.cinvestav.events.Events
-import mx.cinvestav.Declarations.PushResponse
 import retry.{RetryDetails, RetryPolicies, retryingOnAllErrors}
-//import mx.cinvestav.server.HttpServer.User
-import mx.cinvestav.server.Routes.UploadResponse
-import mx.cinvestav.utils.v2.{PublisherConfig, PublisherV2, RabbitMQContext}
-import org.http4s.Request
-import org.http4s.blaze.client.BlazeClientBuilder
-import org.http4s.implicits._
-import org.http4s.dsl.io._
-import org.http4s.circe.CirceEntityEncoder._
-import org.http4s.multipart.{Multipart, Part}
-import org.typelevel.ci._
-//
+
+import java.nio.file.Paths
 import concurrent.duration._
 import language.postfixOps
-//
 import io.circe.syntax._
 import io.circe.generic.auto._
 import scala.language.postfixOps
-import mx.cinvestav.utils.v2.encoders._
-import org.apache.commons.io.FileUtils
-import mx.cinvestav.commons.payloads.{v2=>PAYLOADS}
 import org.http4s._
 import fs2.Stream
-import cats.nio.file.{Files => NIOFIles}
-//
 
 object Helpers {
 
@@ -70,52 +44,86 @@ object Helpers {
     _    <- IO.delay(infl.close())
   } yield out.toByteArray
 
-  def pushToCloud(evictedObject:ObjectS,currentEvents:List[EventX],correlationId:String="")(implicit ctx:NodeContextV6): IO[Unit] = {
+//  def pushToCloud(evictedObject:ObjectS,currentEvents:List[EventX],correlationId:String="")(implicit ctx:NodeContextV6): IO[Unit] = {
+    def pushToNextLevel(
+                     evictedObjectId:String,
+                     bytes:Array[Byte],
+                     metadata:Map[String,String],
+                     currentEvents:List[EventX],
+                     userId:String = "",
+                     correlationId:String="",
+                     delete:Boolean = false,
+                   )(implicit ctx:NodeContextV6): IO[Unit] = {
     //  IO[List[EventX]] = {
     for {
 
       currentState  <- ctx.state.get
-      alreadyPushed = Events.alreadyPushedToCloud(objectId = evictedObject.guid,events = currentEvents)
+      alreadyPushed = if(ctx.config.cloudEnabled) Events.alreadyPushedToCloud(objectId = evictedObjectId,events = currentEvents) else false
+      objectSize = bytes.length
       pushEvents             <- if(!alreadyPushed)
       {
         for {
 
           pushStartAtNanos       <- IO.monotonic.map(_.toNanos)
-          evictedObjectExtension = evictedObject.metadata.getOrElse("extension","bin")
-          evictedObjectId        = evictedObject.guid
-          evictedObjectFilename  = s"${evictedObjectId}.${evictedObjectExtension}"
-          fileExits              <- Dropbox.fileExists(currentState.dropboxClient)(filename = evictedObjectFilename)
-          retryPolicy            = RetryPolicies.limitRetries[IO](10) join RetryPolicies.exponentialBackoff[IO](10 seconds)
-          uploadIO               = Dropbox.uploadObject(currentState.dropboxClient)(
-            filename = s"$evictedObjectId.$evictedObjectExtension",
-            in = new ByteArrayInputStream(evictedObject.bytes)
-          )
-          _                      <- if(!fileExits) retryingOnAllErrors[FileMetadata](
-            policy = retryPolicy,
-            onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage)
-          )(uploadIO)
-          else IO.unit
+          evictedObjectExtension = metadata.getOrElse("extension","bin")
+//          evictedObjectId        = evictedObjectId
+          evictedObjectFilename  = evictedObjectId
+//            s"${evictedObjectId}.${evictedObjectExtension}"
+           x <- if(ctx.config.cloudEnabled) {
+             for {
+               fileExits              <- Dropbox.fileExists(currentState.dropboxClient)(filename = evictedObjectFilename)
+               retryPolicy            = RetryPolicies.limitRetries[IO](10) join RetryPolicies.exponentialBackoff[IO](10 seconds)
+               uploadIO  = Dropbox.uploadObject(currentState.dropboxClient)(
+                 filename = evictedObjectFilename,
+//                   s"$evictedObjectId.$evictedObjectExtension",
+                 in = new ByteArrayInputStream(bytes)
+               )
+               sendToCloud = retryingOnAllErrors[FileMetadata](
+                 policy = retryPolicy,
+                 onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage)
+               )(uploadIO)
+               _         <- if(!fileExits) sendToCloud else
+                 ctx.logger.info(s"ALREADY_PUSHED ${evictedObjectId} $objectSize CLOUD $correlationId")
+             } yield ("","")
+           }
+          else {
+             for {
+               _ <- ctx.logger.debug(s"PUSH_NEX_LEVEL $evictedObjectId $correlationId")
+               x <- ctx.config.cachePool.upload(
+                 objectId = evictedObjectId,bytes = bytes,
+                 userId=userId,
+                 operationId = correlationId,
+                 contentType = MediaType.forExtension(evictedObjectExtension).getOrElse(MediaType.application.`octet-stream`)
+               ).onError{ e=>
+                 ctx.errorLogger.error(e.getMessage)
+               }
+             } yield x
+           }
           pushEndAt              <- IO.realTime.map(_.toMillis)
           pushEndAtNanos         <- IO.monotonic.map(_.toNanos)
           serviceTimePushNanos   =  pushEndAtNanos - pushStartAtNanos
           //
           pushEvent = Push(
             serialNumber     = 0,
-            nodeId           = ctx.config.nodeId,
-            objectId         = evictedObject.guid,
-            objectSize       = evictedObject.bytes.length,
-            pushTo           = "Dropbox",
+            nodeId           = x._1,
+            objectId         = evictedObjectId,
+            objectSize       = objectSize,
+            pushTo           = if(ctx.config.cloudEnabled) "cloud" else "cache-pool",
             timestamp        = pushEndAt,
             serviceTimeNanos = serviceTimePushNanos,
-            correlationId    = correlationId
+            correlationId    = correlationId,
+            uri              = x._2
           )
-          _ <- Events.saveEvents(events = List(pushEvent))
-          _   <- ctx.logger.info(s"PUSH ${evictedObject.guid} ${evictedObject.bytes.length} $serviceTimePushNanos $correlationId")
+          _ <- if(!ctx.config.cloudEnabled && x._1.isEmpty && x._2.isEmpty)
+            ctx.logger.info(s"ALREADY_PUSHED ${evictedObjectId} $objectSize CACHE $correlationId")
+          else for {
+            _ <- Events.saveEvents(events = List(pushEvent))
+            _   <- ctx.logger.info(s"PUSH ${evictedObjectId} $objectSize $serviceTimePushNanos $correlationId")
+          } yield ()
         } yield ()
-//          List(pushEvent)
       }
-//      else IO.pure(List.empty[Push]) <* ctx.logger.info(s"ALREADY_PUSHED ${evictedObject.guid} ${evictedObject.bytes.length} 1")
-      else ctx.logger.info(s"ALREADY_PUSHED ${evictedObject.guid} ${evictedObject.bytes.length} 1 $correlationId")
+      else ctx.logger.info(s"ALREADY_PUSHED ${evictedObjectId} $objectSize CLOUD $correlationId")
+      _ <-  if(delete) Files[IO].delete(Paths.get(s"${ctx.config.storagePath}/$evictedObjectId")) else IO.unit
     } yield ()
 //      pushEvents
   }

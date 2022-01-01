@@ -5,7 +5,7 @@ import cats.effect.IO
 import mx.cinvestav.Declarations.NodeContextV6
 import mx.cinvestav.commons.events.EventXOps
 import mx.cinvestav.events.Events
-import mx.cinvestav.Declarations.Implicits.objectSEncoderv2
+import mx.cinvestav.Declarations.Implicits.{iObjectEncoder, objectSEncoderv2}
 //
 import org.http4s.HttpRoutes
 import org.http4s.dsl.io._
@@ -42,8 +42,7 @@ object StatsController {
           "usedStorageCapacity" -> usedCapacity.asJson,
           "availableStorageCapacity" -> availableCapacity.asJson,
           "timestamp" -> timestamp.asJson,
-          "objects" -> os.asJson
-//            maybeObject.asJson
+          "objects" -> os.map(x=>x.asJson(iObjectEncoder)).asJson
         ).asJson
         response <- Ok(payloadRes)
       } yield response

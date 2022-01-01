@@ -7,7 +7,6 @@ import mx.cinvestav.Declarations.{NodeContextV5, NodeContextV6}
 import mx.cinvestav.commons.compression
 import io.circe._
 import io.circe.generic.auto._
-import mx.cinvestav.cache.cache.CachePolicy
 import mx.cinvestav.commons.fileX.FileMetadata
 import mx.cinvestav.commons.types.ObjectMetadata
 import org.http4s._
@@ -17,9 +16,6 @@ import org.http4s.circe.CirceEntityDecoder._
 import org.http4s.multipart.Multipart
 import org.http4s.headers._
 import org.typelevel.ci.{CIString, CIStringSyntax}
-
-import java.nio.file.Paths
-import java.util.UUID
 
 object Routes {
 //  case class DownloadPayload(id:String, extension:String)

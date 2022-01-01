@@ -1,8 +1,9 @@
 package mx.cinvestav.server.controllers
 import fs2.Stream
+import fs2.io.file.Files
 import cats.implicits._
 import cats.effect.IO
-import mx.cinvestav.Declarations.{NodeContextV6, ObjectS, User}
+import mx.cinvestav.Declarations.{IObject, NodeContextV6, ObjectD, ObjectS, User}
 import mx.cinvestav.Helpers
 import mx.cinvestav.cache.CacheX
 import mx.cinvestav.clouds.Dropbox
@@ -15,6 +16,7 @@ import org.typelevel.ci.CIString
 import retry.{RetryDetails, RetryPolicies, retryingOnAllErrors}
 
 import java.io.ByteArrayInputStream
+import java.nio.file.Paths
 import java.util.UUID
 import scala.concurrent.ExecutionContext.global
 import concurrent.duration._
@@ -58,7 +60,8 @@ object PullController {
                 _ <- IO.unit
                 headers           = response.headers
                 _<- ctx.logger.debug(headers.toString)
-                body              <- response.body.compile.to(Array)
+                newObjectBytes              <- response.body.compile.to(Array)
+                newObjectSize = newObjectBytes.length
                 //        REPLICA METADATA
                 replicaObjectId    = headers.get(CIString("Object-Id")).map(_.head.value).get
                 replicaObjectSize  = headers.get(CIString("Object-Size")).map(_.head.value).flatMap(_.toLongOption).get
@@ -70,15 +73,18 @@ object PullController {
                 replicaExtension   = headers.get(CIString("Object-Extension")).map(_.head.value).getOrElse("bin")
                 _                 <- ctx.logger.info(s"PULL_REPLICA $replicaObjectId $replicaObjectSize $serviceTimeNanos $operationId")
                 //        NEW OBJECT
-                newObject          = ObjectS(
-                  guid     =replicaObjectId,
-                  bytes    = body,
-                  metadata = Map(
+                meta = Map(
                     "objectSize"  -> replicaObjectSize.toString,
                     "contentType" -> replicaContentType,
                     "extension"   -> replicaExtension
                   )
-                )
+                newObject          <- if(ctx.config.inMemory) ObjectS(guid     =replicaObjectId, bytes    = newObjectBytes, metadata = meta).asInstanceOf[IObject].pure[IO]
+                else for {
+                  _    <- IO.unit
+                  path = Paths.get(s"${ctx.config.storagePath}/$replicaObjectId")
+                  o    = ObjectD(guid     =replicaObjectId, path =path, metadata = meta).asInstanceOf[IObject]
+                  _    <- Stream.emits(newObjectBytes).covary[IO].through(Files[IO].writeAll(path)).compile.drain
+                } yield o
                 //
                 evictedElement <- IO.delay{CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)}
                 putEndAt       <- IO.realTime.map(_.toMillis)
@@ -90,12 +96,17 @@ object PullController {
                     newHeades             <- maybeEvictedObject match {
                       case Some(evictedObject) => for {
                         _                <- IO.unit
+                        evictedBytes <- evictedObject match {
+                          case o@ObjectD(guid, path, metadata) => Files[IO].readAll(path,chunkSize=8192).compile.to(Array)
+                          case o@ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+                        }
+                        evictedObjectSize = evictedBytes.length
                         correlationId    = operationId
                         //                    UUID.randomUUID().toString
                         evictedObjectExt = evictedObject.metadata.getOrElse("extension","bin")
                         filename         = s"${evictedObjectId}.$evictedObjectExt"
                         //                 PUSH EVICTED OBJECT TO CLOUD
-                        pushEvent        <- Helpers.pushToCloud(evictedObject, currentEvents, correlationId).start
+                        pushEvent        <- Helpers.pushToNextLevel(evictedObjectId,evictedBytes,evictedObject.metadata, currentEvents, correlationId).start
                         //                DELETE EVICTED OBJECT FROM CACHE
                         deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
                         _                      <- currentState.cache.delete(evictedObjectId)
@@ -114,7 +125,7 @@ object PullController {
                               serialNumber = 0,
                               nodeId = ctx.config.nodeId,
                               objectId = evictedObjectId,
-                              objectSize = evictedObject.bytes.length,
+                              objectSize = evictedObjectSize,
                               timestamp = arrivalTime,
                               serviceTimeNanos = deleteServiceTimeNanos,
                               correlationId = correlationId
@@ -123,7 +134,7 @@ object PullController {
                               serialNumber = 0,
                               nodeId = ctx.config.nodeId,
                               objectId = newObject.guid,
-                              objectSize =newObject.bytes.length,
+                              objectSize =newObjectSize,
                               timestamp = putEndAt,
                               serviceTimeNanos = putServiceTimeNanos,
                               correlationId = correlationId
@@ -135,7 +146,7 @@ object PullController {
                         //                  _                 <- ctx.logger.info(s"PULL_REPLICA $replicaObjectId $replicaObjectSize $serviceTimeNanos 0 $operationId")
                         newHeaders = Headers(
                           Header.Raw(CIString("Evicted-Object-Id"),evictedObjectId),
-                          Header.Raw(CIString("Evicted-Object-Size"),evictedObject.bytes.length.toString),
+                          Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
                           Header.Raw(CIString("Download-Service-Time"),serviceTimeNanos.toString),
                           Header.Raw(CIString("Upload-Service-Time"),putServiceTimeNanos.toString),
                           Header.Raw(CIString("Node-Id"),ctx.config.nodeId ),

@@ -3,10 +3,25 @@ package mx.cinvestav.events
 import cats.effect.IO
 import cats.implicits._
 import mx.cinvestav.Declarations.NodeContextV6
-import mx.cinvestav.commons.events.EventXOps.{OrderOps, sequentialMonotonic}
+import mx.cinvestav.commons.events.EventXOps.{OrderOps,sequentialMonotonic}
 import mx.cinvestav.commons.events.{AddedNode, Del, Downloaded, EventX, EventXOps, Evicted, Get, Pull, Push, Put, RemovedNode, Uploaded, TransferredTemperature => SetDownloads}
 
 object Events {
+
+
+  def onlyPuts(events:List[EventX]) = events.filter{
+    case _:Put => true
+    case _ => false
+  }
+
+  def nextLevelUri(events:List[EventX],objectId:String) = {
+    events.filter{
+      case _:Push => true
+      case _=> false
+    }.map(_.asInstanceOf[Push]).filter(_.objectId==objectId)
+      .maxByOption(_.monotonicTimestamp)
+      .map(_.uri)
+  }
 
   def saveEvents(events:List[EventX])(implicit ctx:NodeContextV6): IO[Unit] = for {
     currentState     <- ctx.state.get
@@ -19,6 +34,12 @@ object Events {
   } yield()
 
   //
+
+//  def alreadyPushedToCloud(objectId:String,events:List[EventX]): Boolean = events.filter {
+//    case _: Push => true
+//    case _ => false
+//  }.map(_.asInstanceOf[Push])
+//    .exists(_.objectId == objectId)
   def alreadyPushedToCloud(objectId:String,events:List[EventX]): Boolean = events.filter {
     case _: Push => true
     case _ => false

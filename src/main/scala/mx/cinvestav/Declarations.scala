@@ -6,12 +6,14 @@ import cats.effect.{IO, Ref}
 import com.dropbox.core.v2.DbxClientV2
 import io.chrisdavenport.mules.MemoryCache
 import mx.cinvestav.commons.events.{Del, ObjectHashing, Push, Pull => PullEvent, TransferredTemperature => SetDownloads}
+import org.http4s.client.Client
+
+import java.nio.file.Path
 //import mx.cinvestav.Declarations.{EventX, Get, Put}
 import mx.cinvestav.cache.CacheX.CacheItem
 import mx.cinvestav.commons.events.{EventX, Get, Put}
 //
 import io.circe._
-import io.circe.generic.auto._
 import io.circe.syntax._
 //
 import mx.cinvestav.cache.CacheX.ICache
@@ -21,16 +23,18 @@ import mx.cinvestav.commons.errors.NodeError
 import mx.cinvestav.commons.fileX.FileMetadata
 import mx.cinvestav.commons.status.Status
 import mx.cinvestav.config.DefaultConfigV5
-import mx.cinvestav.utils.v2.{PublisherV2, RabbitMQContext}
 import mx.cinvestav.commons.compression
 import org.http4s.{AuthedRequest, Request}
 import org.typelevel.log4cats.Logger
 
 import java.io.{ByteArrayOutputStream, File}
 import java.util.UUID
+import io.circe._
+import io.circe.generic.auto._
+import io.circe.syntax._
 
 object Declarations {
-//
+  //
   object Implicits {
     implicit val eventXEncoder: Encoder[EventX] = {
       case put:Put => put.asJson
@@ -42,26 +46,34 @@ object Declarations {
       case transferredTemperature:ObjectHashing => transferredTemperature.asJson
       case _ => Json.Null
     }
-  implicit val objectSEncoder: (String)=>Encoder[CacheItem[ObjectS]] = policy => (a: CacheItem[ObjectS]) => Json.obj(
-    ("guid" -> a.value.guid.asJson),
-    if (policy == "LFU") ("hits" -> a.counter.asJson) else ("sequence_number" -> a.counter.asJson),
-    ("metadata" -> a.value.metadata.asJson)
-  )
-  implicit val objectSEncoderv2: Encoder[ObjectS] = (a: ObjectS) => Json.obj(
-    ("guid" -> a.guid.asJson),
-    ("size"-> a.bytes.length.asJson),
-    ("metadata"->a.metadata.asJson)
+//  implicit val objectSEncoder: (String)=>Encoder[CacheItem[ObjectS]] = policy => (a: CacheItem[ObjectS]) => Json.obj(
+//    ("guid" -> a.value.guid.asJson),
 //    if (policy == "LFU") ("hits" -> a.counter.asJson) else ("sequence_number" -> a.counter.asJson),
 //    ("metadata" -> a.value.metadata.asJson)
+//  )
+  implicit val objectSEncoderv2: Encoder[ObjectS] = (o: ObjectS) => Json.obj(
+    ("guid" -> o.guid.asJson),
+    ("size"-> o.bytes.length.asJson),
+    ("metadata"->o.metadata.asJson)
   )
+  implicit val objectDEncoder:Encoder[ObjectD] = (o:ObjectD) => Json.obj(
+    ("guid" -> o.guid.asJson),
+    "path"-> o.path.toString.asJson,
+    ("metadata"->o.metadata.asJson)
+  )
+  implicit val iObjectEncoder:Encoder[IObject] = {
+    case o: ObjectD => o.asJson(objectDEncoder)
+    case o: ObjectS => o.asJson(objectSEncoderv2)
+  }
   }
   case class ObjectX(guid:String,bytes:Array[Byte],metadata:Map[String,String])
-  case class ObjectS(guid:String,
-                     bytes: Array[Byte],
-//                     fs2.Stream[IO,Byte],
-//                     bytes:fs2.Stream[IO,ByteArrayOutputStream],
-                     metadata:Map[String,String]
-                    )
+
+  trait IObject{
+    def guid:String
+    def metadata:Map[String,String]
+  }
+  case class ObjectD(guid:String, path:Path, metadata: Map[String,String]) extends IObject
+  case class ObjectS(guid:String, bytes: Array[Byte], metadata:Map[String,String]) extends IObject
 
   case class PushResponse(
                            nodeId:String,
@@ -151,12 +163,13 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                             logger: Logger[IO],
                             errorLogger:Logger[IO],
                             state:Ref[IO,NodeStateV6],
+                            client:Client[IO]
                           )
   case class NodeContextV5(
                             config: DefaultConfigV5,
                             logger: Logger[IO],
                             state:Ref[IO,NodeStateV5],
-                            rabbitMQContext: RabbitMQContext
+//                            rabbitMQContext: RabbitMQContext
                           )
 
 
@@ -189,32 +202,25 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
   case class NodeStateV6(
                           levelId:String,
                           status:Status,
-                          cacheNodes: List[String] = List.empty[String],
                           ip:String = "127.0.0.1",
-                          availableResources:Int,
                           totalStorageSpace:Long=1000000000,
-                          cache: MemoryCache[IO,String,ObjectS],
-                          currentEntries:Ref[IO,List[String]],
+                          cache: MemoryCache[IO,String,IObject],
                           cacheSize:Int,
                           downloadCounter:Int=0,
-                          transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
-                          queue:Queue[IO,RequestX],
-                          cacheX:ICache[IO,ObjectS],
                           dropboxClient:DbxClientV2,
                           events:List[EventX] =Nil,
                           s:Semaphore[IO],
                           experimentId:String
-//                          downloadSemaphore:Semaphore[IO]
                         )
   case class NodeStateV5(
                           levelId:String,
                           status:Status,
                           cacheNodes: List[String] = List.empty[String],
 //                          loadBalancer: balancer.LoadBalancer,
-                          loadBalancerPublisherZero:PublisherV2,
-                          loadBalancerPublisherOne:PublisherV2,
-                          cacheNodePubs:Map[String,PublisherV2],
-                          syncNodePubs:Map[String,PublisherV2],
+//                          loadBalancerPublisherZero:PublisherV2,
+//                          loadBalancerPublisherOne:PublisherV2,
+//                          cacheNodePubs:Map[String,PublisherV2],
+//                          syncNodePubs:Map[String,PublisherV2],
                           syncLB:Balancer[String],
                           ip:String = "127.0.0.1",
                           availableResources:Int,

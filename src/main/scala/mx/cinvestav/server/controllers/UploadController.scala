@@ -13,7 +13,7 @@ import org.http4s.AuthedRequest
 
 import java.nio.file.Paths
 //
-import mx.cinvestav.Declarations.{NodeContextV6, ObjectS, User}
+import mx.cinvestav.Declarations.{NodeContext, ObjectS, User}
 import mx.cinvestav.cache.CacheX
 import mx.cinvestav.clouds.Dropbox
 import mx.cinvestav.commons.events.{Del, Push, Put}
@@ -41,14 +41,13 @@ import language.postfixOps
 object UploadController {
 
 
-  def controller(operationId:String, objectId:String)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContextV6)= for {
+  def controller(operationId:String, objectId:String)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext)= for {
       arrivalTime      <- IO.realTime.map(_.toMillis)
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
       currentEvents    = Events.relativeInterpretEvents(currentState.events)
       req              = authReq.req
       user             = authReq.context
-//      operationId      = req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
       multipart        <- req.as[Multipart[IO]]
       parts            = multipart.parts
       //    _______________________________________________
@@ -62,30 +61,6 @@ object UploadController {
           objectExtension = media.fileExtensions.head
           body            = part.body
           bytesBuffer     <- body.compile.to(Array)
-          //              beforeHashNanos <- IO.monotonic.map(_.toNanos)
-          //              x               <- SecureX.sha512AndHex(bytesBuffer).flatMap{ hash=>
-          //                for {
-          //                  hashServiceTime <- IO.monotonic.map(_.toNanos).map(_ - beforeHashNanos)
-          //                  hashNow         <- IO.realTime.map(_.toMillis)
-          //                  _ <- ctx.logger.info(s"HASH $guid $hash $hashServiceTime $operationId")
-          //                  _ <- Events.saveEvents(
-          //                    events = List(
-          //                      ObjectHashing(
-          //                        serialNumber = 0,
-          //                        nodeId = ctx.config.nodeId,
-          //                        objectId = guid,
-          //                        checksum = hash,
-          //                        serviceTimeNanos = hashServiceTime,
-          //                        timestamp = hashNow,
-          //                        monotonicTimestamp = 0,
-          //                        correlationId = operationId,
-          //                        algorithm = "SHA512"
-          //                      )
-          //                    )
-          //                  )
-          //                } yield ()
-          //              }.start
-          //              rawBytesLen  = bytesBuffer.length
           objectSize  = partHeaders
             .get(org.http4s.headers.`Content-Length`.name)
             .map(_.head.value)
@@ -107,11 +82,10 @@ object UploadController {
               "extension" -> objectExtension
             )
           ).asInstanceOf[IObject].pure[IO]
-//          newObjectBytes =
           //        PUT TO CACHE
           evictedElement  <- IO.delay{CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)}
           now             <- IO.realTime.map(_.toMillis)
-          newHeaders <- evictedElement match {
+          newHeaders      <- evictedElement match {
             case Some(evictedObjectId) => for {
               maybeEvictedObject <- currentState.cache.lookup(evictedObjectId)
               newHeades             <- maybeEvictedObject match {
@@ -129,8 +103,6 @@ object UploadController {
                       case _:ObjectS => false
                     }
                   evictedContentType = MediaType.unsafeParse(evictedObject.metadata.getOrElse("contentType","application/octet-stream"))
-//                  _ <- IO.println(s"DELETE $delete")
-//                  _ <- if(ctx.config.cloudEnabled)
                    _ <- Helpers.pushToNextLevel(
                       evictedObjectId = evictedObjectId,
                       bytes = evictedObjectBytes,
@@ -139,21 +111,6 @@ object UploadController {
                       correlationId = operationId,
                       delete = delete
                     ).start
-//                  else for {
-//                    _ <- IO.unit
-//                    status  <- ctx.config.cachePool.upload(
-//                      objectId = evictedObjectId,
-//                      bytes    = evictedObjectBytes,
-//                      userId   = user.id,
-//                      operationId =  operationId,
-//                      contentType = evictedContentType
-//                    ).onError{ t=>
-//                      ctx.errorLogger.error(t.getMessage)
-//                    }
-//                    _ <- ctx.logger.debug(s"EVICTED_CACHE_POOL_STATUS$status")
-//                  } yield ()
-//                  pushEventsFiber        <-
-                  //                DELETE EVICTED OBJECT FROM CACHE
                   deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
 //                  _                      <-
                   _                      <- currentState.cache.delete(evictedObjectId)
@@ -209,7 +166,6 @@ object UploadController {
             } yield newHeades
             //               NO EVICTION
             case None => for {
-              //             NO EVICTION
               //             PUT NEW OBJECT
               putStartAtNanos     <- IO.monotonic.map(_.toNanos)
               _                   <- currentState.cache.insert(objectId,newObject)
@@ -254,7 +210,7 @@ object UploadController {
       }.map(_.head)
 //      _ <- ctx.logger.debug(responses.toString)
     } yield responses
-  def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContextV6): AuthedRoutes[User, IO] = {
+  def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
 
     AuthedRoutes.of[User,IO]{
       case authReq@POST -> Root / "upload" as user => for {
@@ -266,16 +222,63 @@ object UploadController {
         waitingTimeEndAt   <- IO.monotonic.map(_.toNanos)
         waitingTime        = waitingTimeEndAt - waitingTimeStartAt
         _                  <- ctx.logger.info(s"WAITING_TIME $objectId 0 $waitingTime $operationId")
-        response           <- controller(operationId,objectId)(authReq)
-        headers            = response.headers
+        response0           <- controller(operationId,objectId)(authReq)
+        headers            = response0.headers
         objectSize         = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
         _                  <- downloadSemaphore.release
         serviceTimeNanos   <- IO.monotonic.map(_.toNanos).map(_ - waitingTimeStartAt)
-//        _                  <- ctx.logger.info(s"GET $guid $objectSize $serviceTimeNanos $operationId")
-        _                 <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeNanos $operationId")
-        _ <- ctx.logger.debug("____________________________________________________")
+//      ______________________________________________________________
+        response           = response0.putHeaders(
+          Headers(
+            Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
+            Header.Raw(CIString("Service-Time"),serviceTimeNanos.toString)
+          )
+        )
+//      ____________________________________________________________
+        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeNanos $operationId")
+        _                  <- ctx.logger.debug("____________________________________________________")
       } yield response
     }
   }
 
 }
+
+//                  else for {
+//                    _ <- IO.unit
+//                    status  <- ctx.config.cachePool.upload(
+//                      objectId = evictedObjectId,
+//                      bytes    = evictedObjectBytes,
+//                      userId   = user.id,
+//                      operationId =  operationId,
+//                      contentType = evictedContentType
+//                    ).onError{ t=>
+//                      ctx.errorLogger.error(t.getMessage)
+//                    }
+//                    _ <- ctx.logger.debug(s"EVICTED_CACHE_POOL_STATUS$status")
+//                  } yield ()
+//                  pushEventsFiber        <-
+//                DELETE EVICTED OBJECT FROM CACHE
+//              beforeHashNanos <- IO.monotonic.map(_.toNanos)
+//              x               <- SecureX.sha512AndHex(bytesBuffer).flatMap{ hash=>
+//                for {
+//                  hashServiceTime <- IO.monotonic.map(_.toNanos).map(_ - beforeHashNanos)
+//                  hashNow         <- IO.realTime.map(_.toMillis)
+//                  _ <- ctx.logger.info(s"HASH $guid $hash $hashServiceTime $operationId")
+//                  _ <- Events.saveEvents(
+//                    events = List(
+//                      ObjectHashing(
+//                        serialNumber = 0,
+//                        nodeId = ctx.config.nodeId,
+//                        objectId = guid,
+//                        checksum = hash,
+//                        serviceTimeNanos = hashServiceTime,
+//                        timestamp = hashNow,
+//                        monotonicTimestamp = 0,
+//                        correlationId = operationId,
+//                        algorithm = "SHA512"
+//                      )
+//                    )
+//                  )
+//                } yield ()
+//              }.start
+//              rawBytesLen  = bytesBuffer.length

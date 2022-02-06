@@ -2,7 +2,7 @@ package mx.cinvestav.server.controllers
 
 import cats.implicits._
 import cats.effect._
-import mx.cinvestav.Declarations.NodeContextV6
+import mx.cinvestav.Declarations.NodeContext
 import org.http4s._
 import org.http4s.dsl.io._
 import org.http4s.HttpRoutes
@@ -18,7 +18,7 @@ import mx.cinvestav.commons.types.Monitoring.{MemoryInfo, NodeInfo}
 //import mx.cinvestav.commons.types.Monitoring.Implicits._
 
 object InfoRoutes {
-  def apply()(implicit ctx:NodeContextV6) = {
+  def apply()(implicit ctx:NodeContext) = {
     HttpRoutes.of[IO]{
       case req@GET -> Root / "info"=> for {
         currentState         <- ctx.state.get
@@ -52,27 +52,9 @@ object InfoRoutes {
           totalStortageCapacity = totalStorageCapacity,
           usedStorageCapacity = usedStorageCapacity,
           availableStorageCapacity = availableStorageCapacity,
-          ufStorageCapacity = ufStorageCapacity
+          ufStorageCapacity = ufStorageCapacity,
+          nodeId = ctx.config.nodeId
         ).asJson
-        _ <- ctx.logger.debug(s"CACHE_INFO")
-        _ <- ctx.logger.debug(info.toString)
-//        info                 = Json.obj(
-//            "RAMInfo" -> ramInfo.asJson,
-//          "JVMMemoryInfo" -> jvmRamInfo.asJson,
-//          "systemCPUUsage" -> systemCpu.asJson,
-//          "cpuUsage" -> cpu.asJson,
-//          "RAMUf" -> ufRAM.asJson,
-//          "cacheSize" -> cacheSize.asJson,
-//          "usedCacheSize" -> usedCacheSize.asJson,
-//          "availableCacheSize"-> ().asJson,
-//          "ufCacheSize" ->.asJson,
-//          "cachePolicy" -> cachePolicy.asJson,
-//          "totalStorageCapacity" -> totalStorageCapacity.asJson,
-//          "usedStorageCapacity" -> usedStorageCapacity.asJson,
-//          "availableStorageCapacity" -> ().asJson,
-//          "ufStorageCapacity" -> UF.calculate().asJson
-////          "availableStorageCapacity" -> 0.asJson
-//        )
         res <- Ok(info)
       } yield res
     }

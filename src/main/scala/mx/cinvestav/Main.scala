@@ -5,7 +5,7 @@ import cats.effect.std.Semaphore
 import cats.effect.{ExitCode, IO, IOApp}
 import com.dropbox.core.DbxRequestConfig
 import com.dropbox.core.v2.DbxClientV2
-import mx.cinvestav.Declarations.{IObject, NodeContextV6, NodeStateV6}
+import mx.cinvestav.Declarations.{IObject, NodeContext, NodeStateV6}
 import mx.cinvestav.monitoring.Monitoring
 import org.http4s.blaze.client.BlazeClientBuilder
 import retry._
@@ -46,13 +46,11 @@ object Main extends IOApp{
             loadFactor = 0.75f,
             concurrencyLevel = 16
           )
-//          cache                 =  MemoryCache.ofMapRef[IO,String,ObjectS](
           cache                 =  MemoryCache.ofMapRef[IO,String,IObject](
             mr = mr,
             defaultExpiration = None
           )
-          currentEntries  <- IO.ref(List.empty[String])
-//          queue <- Queue.bounded[IO,RequestX](10)
+//          currentEntries  <- IO.ref(List.empty[String])
 
            dbxConfig = DbxRequestConfig.newBuilder("cinvestav-cloud-test/1.0.0").build
            dbxClient = new DbxClientV2(dbxConfig, config.dropboxAccessToken)
@@ -76,7 +74,7 @@ object Main extends IOApp{
           state           <- IO.ref(_initState)
           //        __________________________________________________________________________
           (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
-          implicit0(ctx:NodeContextV6)  <- NodeContextV6(config,logger = unsafeLogger,state=state,errorLogger = unsafeErroLogger,client=client).pure[IO]
+          implicit0(ctx:NodeContext)  <- NodeContext(config,logger = unsafeLogger,state=state,errorLogger = unsafeErroLogger,client=client).pure[IO]
           nodeMetadata = Map(
             "level" -> config.level.toString
           )
@@ -96,10 +94,10 @@ object Main extends IOApp{
 //          connectToMid = ctx.config.pool.addNode(client)(addNodePayload)(ctx=ctx)
           connectToMid = ctx.config.serviceReplicator.startNode()
           connectToMidWithRetry <- retryingOnFailuresAndAllErrors[Status](
-            policy = retryPolicy,
+            policy        = retryPolicy,
             wasSuccessful = (s:Status) => (s.code == 204).pure[IO],
-            onFailure = (status:Status,rd:RetryDetails) => ctx.logger.error(s"FAILURE $status $rd"),
-            onError = (e:Throwable,details:RetryDetails)=>ctx.logger.error(e.getMessage) *> ctx.logger.debug(s"RETRY_DETAILS $details")
+            onFailure     = (status:Status,rd:RetryDetails) => ctx.logger.error(s"FAILURE $status $rd"),
+            onError       = (e:Throwable,details:RetryDetails)=> ctx.logger.error(e.getMessage) *> ctx.logger.debug(s"RETRY_DETAILS $details")
           )(connectToMid)
           _ <- ctx.logger.debug(s"SERVICE_REPLICATOR_STARTED $connectToMidWithRetry")
 //

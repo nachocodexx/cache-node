@@ -3,9 +3,7 @@ import cats.implicits._
 import cats.effect._
 import com.dropbox.core.v2.DbxClientV2
 import com.dropbox.core.v2.files.FileMetadata
-import mx.cinvestav.Declarations.NodeContextV6
-
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream, InputStream, OutputStream}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import scala.collection.JavaConverters._
 
 object Dropbox {

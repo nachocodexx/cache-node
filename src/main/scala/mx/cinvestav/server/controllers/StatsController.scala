@@ -2,7 +2,7 @@ package mx.cinvestav.server.controllers
 
 import cats.implicits._
 import cats.effect.IO
-import mx.cinvestav.Declarations.NodeContextV6
+import mx.cinvestav.Declarations.NodeContext
 import mx.cinvestav.commons.events.EventXOps
 import mx.cinvestav.events.Events
 import mx.cinvestav.Declarations.Implicits.{iObjectEncoder, objectSEncoderv2}
@@ -17,10 +17,10 @@ import io.circe.syntax._
 
 object StatsController {
 
-  def apply()(implicit ctx:NodeContextV6) = {
+  def apply()(implicit ctx:NodeContext) = {
 
     HttpRoutes.of[IO]{
-      case req@GET -> Root => for {
+      case req@GET -> Root / "stats" => for {
         currentState   <- ctx.state.get
         events         = currentState.events
         filteredEvents = Events.relativeInterpretEventsMonotonic(events=events)

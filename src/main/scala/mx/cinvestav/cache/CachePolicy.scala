@@ -3,7 +3,7 @@ package mx.cinvestav.cache
 import cats.implicits._
 import cats.effect._
 import io.chrisdavenport.mules.MemoryCache
-import mx.cinvestav.Declarations.{NodeContextV5, NodeContextV6, ProposedElement}
+import mx.cinvestav.Declarations.{NodeContext, ProposedElement}
 
 object cache{
   type CacheX = MemoryCache[IO,String,Int]
@@ -18,13 +18,13 @@ object cache{
   case class ReadResponse(newCache:CacheX,value:Int,found:Boolean)
   case class WriteResponse(newCache:CacheX)
   sealed trait Policy {
-    def putv2(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[PutResponse]
-    def put(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[PutResponse]
-    def write(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[WriteResponse]
-    def read(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContextV6):IO[ReadResponse]
-    def eviction(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV6):IO[EvictionResponse]
-    def evictionv2(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContextV6):IO[EvictionResponse]
-    def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV6):IO[CacheX]
+    def putv2(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContext):IO[PutResponse]
+    def put(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContext):IO[PutResponse]
+    def write(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContext):IO[WriteResponse]
+    def read(cache: MemoryCache[IO,String,Int], key:String)(implicit ctx:NodeContext):IO[ReadResponse]
+    def eviction(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContext):IO[EvictionResponse]
+    def evictionv2(cache:MemoryCache[IO,String,Int],remove:Boolean=false)(implicit ctx:NodeContext):IO[EvictionResponse]
+    def remove(cache:CacheX,key:String)(implicit ctx:NodeContext):IO[CacheX]
   }
 //  class LFU() extends Policy {
 //    override def remove(cache:CacheX,key:String)(implicit ctx:NodeContextV6):IO[CacheX] = for {

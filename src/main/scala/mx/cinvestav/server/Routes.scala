@@ -3,7 +3,7 @@ package mx.cinvestav.server
 import cats.implicits._
 import cats.effect._
 import fs2.io.file.Files
-import mx.cinvestav.Declarations.{NodeContextV5, NodeContextV6}
+import mx.cinvestav.Declarations.{NodeContext}
 import mx.cinvestav.commons.compression
 import io.circe._
 import io.circe.generic.auto._
@@ -23,7 +23,7 @@ object Routes {
   case class UploadResponse(operationId:String,uploadSize:Long,duration:Long)
 
 
-  def hello(implicit ctx:NodeContextV6): HttpRoutes[IO] = HttpRoutes.of[IO]{
+  def hello(implicit ctx:NodeContext): HttpRoutes[IO] = HttpRoutes.of[IO]{
     case req@GET -> Root   =>
       Ok(s"Hello I'm ${ctx.config.nodeId}")
 //    case req@GET -> Root /"download"/ UUIDVar(guid) =>for {
@@ -124,6 +124,6 @@ object Routes {
 //    } yield response
   }
 
-  def apply()(implicit ctx:NodeContextV6): HttpRoutes[IO] = hello
+  def apply()(implicit ctx:NodeContext): HttpRoutes[IO] = hello
 
 }

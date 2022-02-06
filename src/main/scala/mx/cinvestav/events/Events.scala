@@ -1,16 +1,206 @@
 package mx.cinvestav.events
 
+import breeze.linalg.{*, DenseMatrix, DenseVector, sum}
 import cats.effect.IO
 import cats.implicits._
-import mx.cinvestav.Declarations.NodeContextV6
-import mx.cinvestav.commons.events.EventXOps.{OrderOps,sequentialMonotonic}
+import mx.cinvestav.Declarations.NodeContext
+import mx.cinvestav.commons.events.EventXOps.{OrderOps, sequentialMonotonic}
 import mx.cinvestav.commons.events.{AddedNode, Del, Downloaded, EventX, EventXOps, Evicted, Get, Pull, Push, Put, RemovedNode, Uploaded, TransferredTemperature => SetDownloads}
+import mx.cinvestav.commons.types.DumbObject
+import scala.annotation.tailrec
+import scala.collection.immutable.ListMap
+import scala.concurrent.duration._
+import language.postfixOps
 
 object Events {
+// _____________________________________________________________________________________________________________
+  def getDownloadsByIntervalByObjectId(objectId:String)(period:FiniteDuration)(events:List[EventX]) = {
+    val es = onlyGets(events=events).map(_.asInstanceOf[Get]).filter(_.objectId == objectId).map(_.asInstanceOf[EventX])
+    Events.getDownloadsByInterval(period)(events=es).map(_.length)
+  }
+// _____________________________________________________________________________________________________________
+  def getDownloadsByInterval(period:FiniteDuration)(events:List[EventX]): List[List[EventX]] = {
+    val downloads         = onlyGets(events = events).sortBy(_.monotonicTimestamp)
+    val maybeMinMonotonicTimestamp  = downloads.minByOption(_.monotonicTimestamp).map(_.monotonicTimestamp)
+    maybeMinMonotonicTimestamp match {
+      case Some(minMonotonicTimestamp) =>
+        @tailrec
+        def inner(es:List[List[EventX]], initT:FiniteDuration, i:Int=0):List[List[EventX]]= {
+          val efs = es.flatten
+          val L = efs.length
+          if(L == downloads.length) es
+          else {
+            val newEs = downloads.toSet.diff(efs.toSet).toList
+            if(newEs.isEmpty) es
+            else {
+              val newI  = i + 1
+              val newT  =  (initT.toNanos+ period.toNanos).nanos
+              inner(es = es:+newEs.filter(_.monotonicTimestamp <= initT.toNanos) , initT = newT ,i = newI)
+            }
+          }
+        }
+        inner(es= Nil,initT = (minMonotonicTimestamp + period.toNanos).nanos, i = 1)
+      case None => Nil
+    }
+  }
+// _____________________________________________________________________________________________________________
+  def getHitCounterByNodeV2(events:List[EventX], windowTime:Long=0): Map[String, Double] = {
+    val objectsIds                = getObjectIds(events = events)
+    val downloadObjectInitCounter = objectsIds.map(x=> x -> 0.0).toMap
+    val filtered =  events.filter{
+      case e@(_:Get | _:SetDownloads) => e.monotonicTimestamp > windowTime
+      case _ => false
+    }.foldLeft(List.empty[EventX]){
+      case (_events,currentEvent)=> currentEvent match {
+        case st:SetDownloads => _events.filterNot{
+          case d:Get =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case d:SetDownloads =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case _=> false
+        } :+ st
+        case d:Get => _events :+ d
+      }
+    }
+      .map{
+      case d:Get => Map(d.objectId -> 1.0)
+      case st: SetDownloads => Map(st.objectId -> st.counter.toDouble)
+    }.foldLeft(Map.empty[String,Double])(_ |+| _)
+    (filtered|+|downloadObjectInitCounter).toList.sortBy(_._1).toMap
+  }
+//
+
+  def getHitCounterByUser(events:List[EventX], windowTime:Long=0): Map[String,Map[String, Double]] = {
+    val objectsIds = getObjectIds(events = events)
+    val puts       = onlyPuts(events = events).map(_.asInstanceOf[Put])
+    val xPuts      = puts.map(x=>(x.objectId->x.userId)).toMap
+
+    val downloadObjectInitCounter = objectsIds.map(x=> x -> 0.0).toMap
+    val filtered =  events.filter{
+      case e@(_:Get | _:SetDownloads) => e.monotonicTimestamp > windowTime
+      case _ => false
+    }.foldLeft(List.empty[EventX]){
+      case (_events,currentEvent)=> currentEvent match {
+        case st:SetDownloads => _events.filterNot{
+          case d:Get =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case d:SetDownloads =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case _=> false
+        } :+ st
+        case d:Get => _events :+ d
+      }
+    }
+      .map{
+        case d:Get =>
+          val userId = xPuts(d.objectId)
+          Map(userId -> Map(d.objectId -> 1.0))
+        case st: SetDownloads =>
+          val userId = xPuts(st.objectId)
+          Map(userId -> Map(st.objectId -> st.counter.toDouble) )
+      }.foldLeft(Map.empty[String,Map[String,Double]])(_ |+| _)
+    (filtered).toList.sortBy(_._1).toMap
+  }
+//  Deprecated
+  def getHitCounterByNode(events:List[EventX], windowTime:Long=0): Map[String, Map[String, Int]] = {
+    val objectsIds                = getObjectIds(events = events)
+    val downloadObjectInitCounter = objectsIds.map(x=> x -> 0).toMap
+    val filtered =  events.filter{
+      case e@(_:Get | _:SetDownloads) => e.monotonicTimestamp > windowTime
+      case _ => false
+    }.foldLeft(List.empty[EventX]){
+      case (_events,currentEvent)=> currentEvent match {
+        case st:SetDownloads => _events.filterNot{
+          case d:Get =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case d:SetDownloads =>d.nodeId ==st.nodeId && d.timestamp < st.timestamp && d.objectId == st.objectId
+          case _=> false
+        } :+ st
+        case d:Get => _events :+ d
+      }
+    }.map{
+      case d:Get => Map(d.nodeId -> Map(d.objectId -> 1)  )
+      case st: SetDownloads => Map(st.nodeId -> Map(st.objectId -> st.counter)  )
+    }.foldLeft(Map.empty[String,Map[String,Int]  ])(_ |+| _)
+      .map{
+        case (objectId, value) => (objectId, downloadObjectInitCounter|+|value )
+      }
+    filtered.toList.sortBy(_._1).toMap
+  }
+//
 
 
+  def generateMatrix(events:List[EventX]): DenseMatrix[Double] = {
+    val hitCounter = ListMap(
+      getHitCounterByNode(events = events).toList.sortBy(_._1):_*
+    ).map{
+      case (nodeId, counter) => nodeId-> ListMap(counter.toList.sortBy(_._1):_*)
+    }
+    //      .toMap
+    //    println(s"HIT_COUNTER ${hitCounter}")
+    val vectors = hitCounter
+      .toList.sortBy(_._1)
+      .map{
+        case (nodeId, objectDownloadCounter) =>
+          val values = objectDownloadCounter.values.toArray.map(_.toDouble)
+          val vec = DenseVector(values:_*)
+          vec
+      }.toList
+    DenseMatrix(vectors.map(_.toArray):_*)
+  }
+
+  def generateMatrixV2(events:List[EventX], windowTime:Long=0): DenseVector[Double] = {
+    val hitCounter = ListMap(
+      getHitCounterByNodeV2(events = events,windowTime = windowTime).toList.sortBy(_._1):_*
+    )
+    DenseVector.apply(hitCounter.values.toArray)
+//    ()
+//      .map{
+//      case (objectId, counter) =>
+//      case (nodeId, counter) => nodeId->
+//        ListMap(counter.toList.sortBy(_._1):_*)
+//    }
+    //      .toMap
+    //    println(s"HIT_COUNTER ${hitCounter}")
+//    val vectors = hitCounter
+//      .toList.sortBy(_._1)
+//      .map{
+//        case (objectId,counter)=>
+
+//        case (nodeId, objectDownloadCounter) =>
+//          val values = objectDownloadCounter.values.toArray.map(_.toDouble)
+//          val vec = DenseVector(values:_*)
+//          vec
+//      }
+//    DenseMatrix(vectors.map(_.toArray):_*)
+  }
+
+//  def generateReplicaUtilization(events:List[EventX]) = {
+//    val x                = Events.generateMatrixV2(events = events,windowTime = 0)
+//    val sumA             = (sum(x(::,*)).t).mapValues(x=>if(x==0) 1 else x)
+//    val xx = x(*,::) / sumA
+//    xx
+//  }
+//  def generateTemperatureMatrix(events:List[EventX]): DenseMatrix[Double] =  {
+//    val x = Events.generateMatrix(events=events)
+//    val dividend = sum(x(*,::))
+//    x(::,*)  / dividend
+//  }
+//  def generateTemperatureMatrixV2(events:List[EventX],windowTime:Long): DenseMatrix[Double] =  {
+//    val x = Events.generateMatrixV2(events=events,windowTime = windowTime)
+//    val dividend = sum(x(*,::)).mapValues(x=>if(x==0) 1 else x)
+//    x(::,*)  / dividend
+//  }
+//  def generateTemperatureMatrixV3(events:List[EventX],windowTime:Long): DenseMatrix[Double] =  {
+//    val x = Events.generateMatrixV2(events=events,windowTime = windowTime)
+//    x
+//    //    val dividend = sum(x(*,::))
+//    //    x(::,*)
+//  }
+//
+
+//
   def onlyPuts(events:List[EventX]) = events.filter{
     case _:Put => true
+    case _ => false
+  }
+  def onlyGets(events:List[EventX]) = events.filter{
+    case _:Get => true
     case _ => false
   }
 
@@ -23,7 +213,7 @@ object Events {
       .map(_.uri)
   }
 
-  def saveEvents(events:List[EventX])(implicit ctx:NodeContextV6): IO[Unit] = for {
+  def saveEvents(events:List[EventX])(implicit ctx:NodeContext): IO[Unit] = for {
     currentState     <- ctx.state.get
     currentEvents    = currentState.events
     lastSerialNumber = currentEvents.length
@@ -46,6 +236,11 @@ object Events {
   }.map(_.asInstanceOf[Push])
     .exists(_.objectId == objectId)
 
+
+  def getDumbObjects(events:List[EventX]): List[DumbObject] =
+    Events.onlyPuts(events = events).map(_.asInstanceOf[Put]).map{
+    x=> DumbObject(x.objectId,x.objectSize)
+  }.distinctBy(_.objectId)
   def getObjectIds(events:List[EventX]): List[String] =
   EventXOps.onlyPuts(events = events)
      .map(_.asInstanceOf[Put])
@@ -149,6 +344,7 @@ object Events {
       }
       .distinct
 
+//    println(x.length)
     if(x.length == cacheSize)
       x.lastOption
     else

@@ -2,7 +2,7 @@ package mx.cinvestav.monitoring
 import cats.implicits._
 import cats.effect._
 import fs2._
-import mx.cinvestav.Declarations.NodeContextV6
+import mx.cinvestav.Declarations.NodeContext
 import org.typelevel.ci.CIString
 //
 import org.http4s._
@@ -13,7 +13,7 @@ import scala.concurrent.duration._
 import language.postfixOps
 
 object Monitoring {
-  def run(client:Client[IO])(implicit ctx:NodeContextV6) =  IO.unit
+  def run(client:Client[IO])(implicit ctx:NodeContext) =  IO.unit
 //    Stream.awakeEvery[IO](ctx.config.monitoringDelayMs milliseconds).flatMap{ _=>
 //    for {
 //      _

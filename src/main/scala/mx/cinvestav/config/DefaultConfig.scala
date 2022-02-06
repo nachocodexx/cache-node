@@ -1,25 +1,29 @@
 package mx.cinvestav.config
 
-import cats.data.NonEmptyList
-import org.http4s.blaze.client.BlazeClientBuilder
-
+//
 import scala.concurrent.ExecutionContext.global
 import cats.effect._
-import io.circe.Json
+
+import java.net.InetAddress
+//
+import io.circe._
 import io.circe.generic.auto._
 import io.circe.syntax._
-import mx.cinvestav.Declarations.NodeContextV6
+//
+import mx.cinvestav.Declarations.NodeContext
 import mx.cinvestav.commons.types.ObjectMetadata
-import org.http4s.circe.CirceEntityCodec.{circeEntityDecoder, circeEntityEncoder}
-import org.http4s.{Header, Headers, MediaType, Method, Request, Status, Uri, headers}
 import mx.cinvestav.Implicits._
 import mx.cinvestav.commons.events.{Del, Evicted, Put}
-import mx.cinvestav.commons.payloads.AddCacheNode
+import mx.cinvestav.commons.payloads.{AddCacheNode,PutAndGet}
+//
+import org.http4s.blaze.client.BlazeClientBuilder
+import org.http4s.circe.CirceEntityCodec.{circeEntityDecoder, circeEntityEncoder}
+import org.http4s.{Header, Headers, MediaType, Method, Request, Status, Uri, headers}
 import org.http4s.client.Client
 import org.http4s.multipart.{Multipart, Part}
 import org.typelevel.ci.CIString
+//
 import fs2.Stream
-
 import java.util.UUID
 
 case class ChordGetResponse(
@@ -67,7 +71,7 @@ case class LoadBalancerInfo(
                            ){
   def httpURL = s"http://$ip:$port"
   def addNodeUri = s"http://$ip:$port/api/v6/add-node"
-  def addNode(payload:AddCacheNode)(implicit ctx:NodeContextV6) = for {
+  def addNode(payload:AddCacheNode)(implicit ctx:NodeContext) = for {
     timestamp          <- IO.realTime.map(_.toMillis)
     _                  <- ctx.logger.debug("ADD_NODE")
     (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
@@ -89,12 +93,12 @@ case class Pool(hostname:String,port:Int) {
   def httpURL = s"http://$hostname:$port"
   def addNodeUri = s"http://$hostname:$port/api/v2/add-node"
   def evictedUri = s"http://$hostname:$port/api/v2/evicted"
-  def putUri = s"$httpURL/api/v7/put"
+  def putUri = s"$httpURL/api/v2/put"
   def monirotingUrl(nodeId:String) = s"$httpURL/api/v7/monitoring/$nodeId"
-  def uploadUri = s"$httpURL/api/v7/uploadv2"
+  def uploadUri = s"$httpURL/api/v2/upload"
   def downloadUri(objectId:String) = s"$httpURL/api/v7/download/$objectId"
 
-  def sendPut(put:Put)(implicit ctx:NodeContextV6) = for {
+  def sendPut(put:PutAndGet)(implicit ctx:NodeContext) = for {
     _                  <- IO.unit
     req                = Request[IO](
       method = Method.POST,
@@ -111,7 +115,7 @@ case class Pool(hostname:String,port:Int) {
               userId:String,
               operationId:String = UUID.randomUUID().toString,
               contentType:MediaType= MediaType.text.plain
-            )(implicit ctx:NodeContextV6) = {
+            )(implicit ctx:NodeContext) = {
     val multipart = Multipart[IO](
       parts = Vector(Part(
         headers = Headers(
@@ -176,7 +180,7 @@ case class Pool(hostname:String,port:Int) {
     } yield (res)
   app.compile.lastOrError
   }
-  def download(objectId:String, objectSize:Long=0, userId:String="", operationId:String="", objectExtension:String="")(implicit ctx:NodeContextV6)={
+  def download(objectId:String, objectSize:Long=0, userId:String="", operationId:String="", objectExtension:String="")(implicit ctx:NodeContext)={
     val downloadReq =(uri:String)=> Request[IO](
       method = Method.GET,
       uri = Uri.unsafeFromString(uri),
@@ -205,7 +209,7 @@ case class Pool(hostname:String,port:Int) {
     x
   }
 
-  def sendEvicted(payload:Del)(implicit ctx:NodeContextV6) = for {
+  def sendEvicted(payload:Del)(implicit ctx:NodeContext) = for {
     timestamp          <- IO.realTime.map(_.toMillis)
 //    (client,finalizer) <- BlazeClientBuilder[IO](global).resource.allocated
     evicted            = Evicted(
@@ -229,7 +233,7 @@ case class Pool(hostname:String,port:Int) {
     _                  <- ctx.logger.debug(s"EVICTED_STATUS $status")
 //    _                  <- finalizer
   }  yield ()
-  def addNode(client:Client[IO])(payload:AddCacheNode)(implicit ctx:NodeContextV6) = for {
+  def addNode(client:Client[IO])(payload:AddCacheNode)(implicit ctx:NodeContext) = for {
     timestamp          <- IO.realTime.map(_.toMillis)
     req                = Request[IO](
       method = Method.POST,
@@ -245,12 +249,15 @@ case class Pool(hostname:String,port:Int) {
 }
 
 case class ServiceReplicator(hostname:String,port:Int){
-  def startNode()(implicit ctx:NodeContextV6) = {
+  def startNode()(implicit ctx:NodeContext) = {
     val nodeId  = ctx.config.nodeId
     val uri     = Uri.unsafeFromString(s"http://$hostname:$port/api/v${ctx.config.apiVersion}/nodes/start/$nodeId")
+//    val ip      = InetAddress.getLocalHost.getHostAddress
+//    val port    = InetAddress
     val request =  Request[IO](
       method = Method.POST,
-      uri    = uri
+      uri    = uri,
+      headers = Headers.empty
     )
     ctx.client.status(request)
   }
@@ -274,6 +281,7 @@ case class DefaultConfigV5(
                             inMemory:Boolean,
                             cachePool:Pool,
                             apiVersion:Int,
-                            serviceReplicator: ServiceReplicator
+                            serviceReplicator: ServiceReplicator,
+                            intervalMs:Long
                         )
 

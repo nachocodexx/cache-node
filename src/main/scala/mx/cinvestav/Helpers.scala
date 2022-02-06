@@ -1,28 +1,181 @@
 package mx.cinvestav
-import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
 import cats.implicits._
 import cats.effect.{IO, Ref}
-import com.dropbox.core.v2.files.FileMetadata
+//
 import fs2.io.file.Files
-import mx.cinvestav.Declarations.NodeContextV6
+import fs2.Stream
+//
+import com.dropbox.core.v2.files.FileMetadata
+//
+import mx.cinvestav.Declarations.{IObject, NodeContext, ObjectD, ObjectS}
 import mx.cinvestav.clouds.Dropbox
-import mx.cinvestav.commons.events.{EventX,Push}
+import mx.cinvestav.commons.events.{Del, EventX, Push, Put}
 import mx.cinvestav.events.Events
+import mx.cinvestav.cache.CacheX
+//
 import retry.{RetryDetails, RetryPolicies, retryingOnAllErrors}
-
+//
 import java.nio.file.Paths
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream}
+import java.util.zip.DeflaterOutputStream
+import java.util.zip.InflaterOutputStream
+//
 import concurrent.duration._
-import language.postfixOps
+//
 import io.circe.syntax._
 import io.circe.generic.auto._
-import scala.language.postfixOps
+//
 import org.http4s._
-import fs2.Stream
+//
+import org.typelevel.ci.CIString
+//
+import scala.concurrent.duration._
+import language.postfixOps
+//
+import mx.cinvestav.commons.events.EventXOps
+import mx.cinvestav.commons.types.DumbObject
+import mx.cinvestav.commons.replication.popularity.nextNumberOfAccess
 
 object Helpers {
 
-  import java.util.zip.DeflaterOutputStream
-  import java.util.zip.InflaterOutputStream
+
+
+//  __________________________________________
+  def generateNextNumberOfAccessByObjectId(events:List[EventX])(period:FiniteDuration) = {
+    val F       = EventXOps.getDumbObjects(events=events)
+     F.map{ f =>
+      val y = Events.getDownloadsByIntervalByObjectId(objectId = f.objectId)(period)(events=events)
+      f.objectId -> nextNumberOfAccess(y)
+    }.toMap
+  }
+//  ___________________________________________
+
+
+  def uploadObj(
+                 operationId:String,
+                 objectId:String,
+                 objectSize:Long,
+                 bytesBuffer:Array[Byte],
+                 objectExtension:String
+               )(implicit ctx:NodeContext)= {
+    for {
+      _             <- IO.unit
+      currentState  <- ctx.state.get
+      currentEvents = currentState.events
+      newObject     <- if(!ctx.config.inMemory) {
+        for {
+          _    <- IO.unit
+          meta = Map("objectSize"->objectSize.toString, "contentType" -> "", "extension" -> objectExtension)
+          path = Paths.get(s"${ctx.config.storagePath}/$objectId")
+          o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
+          _    <- Stream.emits(bytesBuffer).covary[IO].through(Files[IO].writeAll(path)).compile.drain
+        } yield o
+      } else {
+        ObjectS(
+          guid=objectId,
+          bytes= bytesBuffer,
+          metadata=Map(
+            "objectSize"->objectSize.toString,
+            "contentType" -> "",
+            "extension" -> objectExtension
+          )
+        ).asInstanceOf[IObject].pure[IO]
+      }
+      //        PUT TO CACHE
+      evictedElement  <- IO.delay{CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)}
+      now             <- IO.realTime.map(_.toMillis)
+      _put <- evictedElement match {
+        case Some(evictedObjectId) => for {
+          maybeEvictedObject <- currentState.cache.lookup(evictedObjectId)
+          x                  <- maybeEvictedObject match {
+            case Some(evictedObject) => for {
+              _                    <- IO.unit
+              evictedObjectBytes   <- evictedObject match {
+                case ObjectD(_,path,_) => Files[IO].readAll(path,chunkSize = 8192).compile.to(Array)
+                case ObjectS(_,bytes,_) => bytes.pure[IO]
+              }
+              evictedObjectSize    = evictedObjectBytes.length
+//
+              delete               = evictedObject match {
+                case _:ObjectD => true
+                case _:ObjectS => false
+              }
+//
+              evictedContentType    = MediaType.unsafeParse(evictedObject.metadata.getOrElse("contentType","application/octet-stream"))
+//
+              _                     <- Helpers.pushToNextLevel(
+                evictedObjectId = evictedObjectId,
+                bytes = evictedObjectBytes,
+                metadata = evictedObject.metadata,
+                currentEvents = currentEvents,
+                correlationId = operationId,
+                delete = delete
+              ).start
+//
+              deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
+//              DELETE FROM CACHE
+              _                      <- currentState.cache.delete(evictedObjectId)
+              deleteEndAt            <- IO.realTime.map(_.toMillis)
+              deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
+              deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
+              //                PUT NEW OBJECT IN CACHE
+              putStartAtNanos        <- IO.monotonic.map(_.toNanos)
+              _                      <- currentState.cache.insert(objectId,newObject)
+              putEndAt               <- IO.realTime.map(_.toMillis)
+              putEndAtNanos          <- IO.monotonic.map(_.toNanos)
+              putServiceTimeNanos    = putEndAtNanos - putStartAtNanos
+              delEvent = Del(
+                serialNumber = 0 ,
+                nodeId = ctx.config.nodeId,
+                objectId = evictedObjectId,
+                objectSize = evictedObjectSize,
+                timestamp =deleteEndAt,
+                serviceTimeNanos = deleteServiceTimeNanos,
+                correlationId = operationId
+              )
+              _put = Put(
+                  serialNumber = 0,
+                  nodeId = ctx.config.nodeId,
+                  objectId = newObject.guid,
+                  objectSize = objectSize.toLong,
+                  timestamp = putEndAt,
+                  serviceTimeNanos = putServiceTimeNanos,
+                  correlationId = operationId
+                )
+              _                      <- Events.saveEvents(List(delEvent,_put))
+              //                      EVICTED
+              _                      <- ctx.config.pool.sendEvicted(delEvent).start
+//              _                      <- ctx.config.pool.sendPut(_put).start
+          } yield _put
+          case None =>
+            for {
+              _ <- ctx.logger.error("WARNING: OBJECT WAS NOT PRESENT IN THE CACHE.")
+            } yield Put.empty
+          }
+        } yield x
+        //               NO EVICTION
+        case None => for {
+          //             PUT NEW OBJECT
+          putStartAtNanos     <- IO.monotonic.map(_.toNanos)
+          _                   <- currentState.cache.insert(objectId,newObject)
+          putEndAtNanos       <- IO.monotonic.map(_.toNanos)
+          putServiceTimeNanos = putEndAtNanos - putStartAtNanos
+          _put                = Put(
+              serialNumber = 0,
+              nodeId = ctx.config.nodeId,
+              objectId = newObject.guid,
+              objectSize = objectSize,
+              timestamp = now,
+              serviceTimeNanos = putServiceTimeNanos,
+              correlationId = operationId
+            )
+          _                   <- Events.saveEvents(events =  List(_put))
+//          _                   <- ctx.config.pool.sendPut(_put).start
+        } yield _put
+      }
+
+    } yield _put
+  }
 
   def compress(in: Array[Byte]):IO[Array[Byte]] = {
     for {
@@ -53,7 +206,7 @@ object Helpers {
                      userId:String = "",
                      correlationId:String="",
                      delete:Boolean = false,
-                   )(implicit ctx:NodeContextV6): IO[Unit] = {
+                   )(implicit ctx:NodeContext): IO[Unit] = {
     //  IO[List[EventX]] = {
     for {
 

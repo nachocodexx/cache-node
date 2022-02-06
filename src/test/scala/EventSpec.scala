@@ -1,6 +1,7 @@
+import breeze.linalg.sum
 import cats.implicits._
 import cats.effect._
-import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, TransferredTemperature=>SetDownloads}
+import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, TransferredTemperature => SetDownloads}
 import mx.cinvestav.events.Events
 import mx.cinvestav.Declarations.Implicits._
 //
@@ -28,7 +29,9 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F0",
       objectSize = 1000,
       timestamp = 1,
-      serviceTimeNanos = 0
+      serviceTimeNanos = 0,
+      monotonicTimestamp = 1,
+      userId = "0"
     )
     val baseDel = Del(
       eventId = "event-2",
@@ -56,48 +59,40 @@ class EventSpec  extends munit .CatsEffectSuite {
       objectId = "F1",
       counter = 0,
       timestamp = 0,
-      serviceTimeNanos = 0L
+      serviceTimeNanos = 0L,userId="1"
     )
 
     val rawEvents = List(
         basePut,
         baseGet.copy(objectId = "F0"),
         baseGet.copy(objectId = "F0"),
-        basePut.copy(objectId = "F1"),
-        baseDel.copy(objectId = "F1"),
+//
+        basePut.copy(objectId = "F1",userId="1"),
+        baseGet.copy(objectId = "F1",userId="2"),
+        baseGet.copy(objectId = "F1",userId="3"),
+        baseGet.copy(objectId = "F1",userId="4"),
+        baseGet.copy(objectId = "F1"),
+//
         basePut.copy(objectId = "F2"),
-
-      //        basePut.copy(objectId = "F2"),
-//        baseGet.copy(objectId = "F1"),
-      //        basePut.copy(objectId = "F2"),
-      //        baseGet,
-//        baseDel,
-//        basePut.copy(objectId = "F1"),
-//        baseGet.copy(objectId = "F1"),
-//        baseGet.copy(objectId = "F1"),
-//        basePull,
-//        basePut.copy(timestamp = 10),
-//        baseGet.copy(timestamp = 11),
-//        baseGet.copy(timestamp = 12),
-//        baseGet.copy(timestamp = 13),
-//        basePut.copy(objectId = "F2",timestamp = 14),
-//        baseGet.copy(objectId = "F2",timestamp = 15),
-//        baseSetDownloads.copy(counter = 10),
-//        baseSetDownloads.copy(counter = 5,objectId = "F2"),
-//        baseGet.copy(objectId = "F1",timestamp = 16),
-
-      //        baseGet.copy(objectId = "F2",timestamp = 16),
-//        baseGet.copy(objectId = "F2",timestamp = 17),
-
+        baseGet.copy(objectId = "F2"),
     )
     val events = Events.relativeInterpretEvents(rawEvents)
+//    println(events)
 //    val x      = Events.getObjectIds(events = events)
 //    println(x)
 //    PUT
-    val evictedElement0 = Events.LFU(events = events,cacheSize = 2)
-    val evictedElement1 = Events.LRU(events = events,cacheSize = 2)
+    val evictedElement0 = Events.LFU(events = events,cacheSize = 3)
+    val evictedElement1 = Events.LRU(events = events,cacheSize = 3)
+    val counter = Events.getHitCounterByNodeV2(events=events)
+    val mx      = Events.generateMatrixV2(events=events)
+    val x= mx/sum(mx)
+    val y = Events.getHitCounterByUser(events=events)
     println(evictedElement0)
     println(evictedElement1)
+    println(counter)
+    println(mx)
+    println(x)
+    println(y)
 
 //    val x= EventXOps.OrderOps.byTimestamp(EventXOps.onlyGets(events = events)).map(_.asInstanceOf[Get]).map(_.objectId).distinct
 //    val y = x.last

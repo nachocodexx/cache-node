@@ -2,7 +2,7 @@ package mx.cinvestav.server.middlewares
 import cats.implicits._
 import cats.data.{Kleisli, OptionT}
 import cats.effect.IO
-import mx.cinvestav.Declarations.{NodeContextV6, User}
+import mx.cinvestav.Declarations.{NodeContext, User}
 import org.http4s.Request
 import org.http4s.server.AuthMiddleware
 import org.typelevel.ci.CIStringSyntax
@@ -12,7 +12,7 @@ import java.util.UUID
 object AuthMiddlewareX {
 
 
-  def authUser()(implicit ctx:NodeContextV6):Kleisli[OptionT[IO,*],Request[IO],User] =
+  def authUser()(implicit ctx:NodeContext):Kleisli[OptionT[IO,*],Request[IO],User] =
     Kleisli{ req=> for {
       _          <- OptionT.liftF(IO.unit)
       headers    = req.headers
@@ -37,7 +37,7 @@ object AuthMiddlewareX {
     }
 
 //  def authMiddleware(implicit ctx:NodeContextV6):AuthMiddleware[IO,User] =
-  def apply(implicit ctx:NodeContextV6): AuthMiddleware[IO, User] =
+  def apply(implicit ctx:NodeContext): AuthMiddleware[IO, User] =
     AuthMiddleware(authUser=authUser)
 
 }

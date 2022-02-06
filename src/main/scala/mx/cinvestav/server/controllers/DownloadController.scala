@@ -8,11 +8,12 @@ import fs2.io.file.Files
 import mx.cinvestav.Declarations.{IObject, ObjectD}
 import mx.cinvestav.{Declarations, Helpers}
 import mx.cinvestav.commons.events.EventXOps
+import mx.cinvestav.commons.payloads.PutAndGet
 import retry.{RetryDetails, RetryPolicies, retryingOnAllErrors}
 
 import java.nio.file.Paths
 //
-import mx.cinvestav.Declarations.{NodeContextV6, ObjectS, User}
+import mx.cinvestav.Declarations.{NodeContext, ObjectS, User}
 import mx.cinvestav.cache.CacheX
 import mx.cinvestav.clouds.Dropbox
 import mx.cinvestav.commons.events.{Del, Get, Push, Put,Pull=>PullEvent}
@@ -33,7 +34,7 @@ import language.postfixOps
 object DownloadController {
 
 
-  def controller(operationId:String)(authReq: AuthedRequest[IO,User],guid:String)(implicit ctx:NodeContextV6) = for {
+  def controller(operationId:String)(authReq: AuthedRequest[IO,User],guid:String)(implicit ctx:NodeContext) = for {
       arrivalTime      <- IO.realTime.map(_.toMillis)
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
@@ -88,13 +89,9 @@ object DownloadController {
           _ <- ctx.logger.debug(s"MISS $guid")
           //         PULL FROM CLOUD
           correlationId        = operationId
-//          filename             = s"${guid}.$objectExt"
           filename             = guid
-//          else {
-//            for {
           cloudStartAtNanos    <- IO.monotonic.map(_.toNanos)
           out                  = new ByteArrayOutputStream()
-          retryPolicy          = RetryPolicies.limitRetries[IO](100) join RetryPolicies.exponentialBackoff[IO](2 seconds)
 //          elementBytesIO       = Dropbox.downloadObject(currentState.dropboxClient)(filename=filename,out=out )
 //          fileExitsInCloud <- Dropbox.fileExists(currentState.dropboxClient)(filename = filename)
           elementBytesIO       = if(ctx.config.cloudEnabled) Dropbox.downloadObject(currentState.dropboxClient)(filename=filename,out=out )
@@ -109,10 +106,14 @@ object DownloadController {
 //            }
 //          } yield (false)
 
+          retryPolicy     = RetryPolicies.limitRetries[IO](1) join RetryPolicies.exponentialBackoff[IO](0.1 seconds)
           elementBytes    <- retryingOnAllErrors[Array[Byte]](
             policy = retryPolicy,
             onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage+s"  $guid")
           )(elementBytesIO)
+
+
+
 
           cloudEndAt           <- IO.realTime.map(_.toMillis)
           cloudEndAtNanos      <- IO.monotonic.map(_.toNanos)
@@ -144,6 +145,15 @@ object DownloadController {
             timestamp = putEndAt,
             serviceTimeNanos = putServiceTimeNanos,
             correlationId = correlationId
+          )
+          _get = Get(
+          serialNumber = 0,
+          nodeId = currentNodeId,
+          objectId = newObject.guid,
+          objectSize = newObjectSize,
+          timestamp = putEndAt+1,
+          serviceTimeNanos = getStNanos,
+          correlationId = correlationId
           )
           evictionHeaders <- maybeEvictedObject match {
             case Some(evictedObject) =>  for {
@@ -187,26 +197,27 @@ object DownloadController {
                     correlationId = correlationId
                   ),
                   delEvent,
-                  Put(
-                    //                        eventId = UUID.randomUUID().toString,
-                    serialNumber = 0,
-                    nodeId = currentNodeId,
-                    objectId = newObject.guid,
-                    objectSize = newObjectSize,
-                    timestamp = putEndAt,
-                    serviceTimeNanos = putServiceTimeNanos,
-                    correlationId = correlationId
-                  ),
-                  Get(
-                    //                        eventId = UUID.randomUUID().toString,
-                    serialNumber = 0 ,
-                    nodeId = currentNodeId,
-                    objectId = newObject.guid,
-                    objectSize = newObjectSize,
-                    timestamp = putEndAt+1,
-                    serviceTimeNanos = getStNanos,
-                    correlationId = correlationId
-                  )
+                  put,
+                  _get
+//                  Put(
+//                    //                        eventId = UUID.randomUUID().toString,
+//                    serialNumber = 0,
+//                    nodeId = currentNodeId,
+//                    objectId = newObject.guid,
+//                    objectSize = newObjectSize,
+//                    timestamp = putEndAt,
+//                    serviceTimeNanos = putServiceTimeNanos,
+//                    correlationId = correlationId
+//                  ),
+//                  Get(
+//                    serialNumber = 0 ,
+//                    nodeId = currentNodeId,
+//                    objectId = newObject.guid,
+//                    objectSize = newObjectSize,
+//                    timestamp = putEndAt+1,
+//                    serviceTimeNanos = getStNanos,
+//                    correlationId = correlationId
+//                  )
                 )
               )
               evictionHeaders = Headers(
@@ -230,23 +241,21 @@ object DownloadController {
                     serviceTimeNanos = pullServiceTimeNanos,
                     correlationId = correlationId
                   ),
-                  put,
-                  Get(
-                    serialNumber = 0,
-                    nodeId = currentNodeId,
-                    objectId = newObject.guid,
-                    objectSize = newObjectSize,
-                    timestamp = putEndAt+1,
-                    serviceTimeNanos = getStNanos,
-                    correlationId = correlationId
-                  )
+                  put
                 )
               )
               emptyHeaders = Headers.empty
             } yield emptyHeaders
             //                  IO.pure(Headers.empty)
           }
-          _ <- ctx.config.pool.sendPut(put)
+//          _get = Get(
+//            se
+//          )
+          putAndGet = PutAndGet(
+            put = put,
+            get = _get
+          )
+          _ <- ctx.config.pool.sendPut(putAndGet)
           getServiceTimeNanos  <- IO.monotonic.map(_.toNanos).map(_ - arrivalTimeNanos)
           _              <- ctx.logger.info(s"GET $guid ${newObjectSize} $getServiceTimeNanos $operationId")
           response       <- Ok(Stream.emits(elementBytes).covary[IO],
@@ -264,22 +273,27 @@ object DownloadController {
 
       }
     } yield res
-  def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContextV6) = {
+  def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext) = {
     AuthedRoutes.of[User,IO]{
       case authReq@GET -> Root / "download" / guid as user => for {
-//        _                  <- IO.println("HEREEEEEEEEEEEEEEEEEEEE_DOENLOADAAAAAAAA!")
         waitingTimeStartAt <- IO.monotonic.map(_.toNanos)
         _                  <- downloadSemaphore.acquire
         operationId        = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-//        _                  <- IO.println("AFTER_OPS!")
+        //        _                  <- IO.println("AFTER_OPS!")
         waitingTimeEndAt   <- IO.monotonic.map(_.toNanos)
         waitingTime        = waitingTimeEndAt - waitingTimeStartAt
         _                  <- ctx.logger.info(s"WAITING_TIME $guid 0 $waitingTime $operationId")
-        response           <- controller(operationId)(authReq,guid)
-        headers            = response.headers
+        response0           <- controller(operationId)(authReq,guid)
+        headers            = response0.headers
         objectSize         = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
         _                  <- downloadSemaphore.release
         serviceTimeNanos   <- IO.monotonic.map(_.toNanos).map(_ - waitingTimeStartAt)
+        response           = response0.putHeaders(
+                  Headers(
+                    Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
+                    Header.Raw(CIString("Service-Time"),serviceTimeNanos.toString)
+                  )
+        )
         _                  <- ctx.logger.info(s"GET $guid $objectSize $serviceTimeNanos $operationId")
         _ <- ctx.logger.debug("____________________________________________________")
       } yield response

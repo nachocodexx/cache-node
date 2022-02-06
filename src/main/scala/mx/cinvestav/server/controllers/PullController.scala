@@ -3,7 +3,7 @@ import fs2.Stream
 import fs2.io.file.Files
 import cats.implicits._
 import cats.effect.IO
-import mx.cinvestav.Declarations.{IObject, NodeContextV6, ObjectD, ObjectS, User}
+import mx.cinvestav.Declarations.{IObject, NodeContext, ObjectD, ObjectS, User}
 import mx.cinvestav.Helpers
 import mx.cinvestav.cache.CacheX
 import mx.cinvestav.clouds.Dropbox
@@ -25,7 +25,7 @@ import language.postfixOps
 object PullController {
 
 
-  def controller(req:Request[IO])(implicit ctx:NodeContextV6) = for {
+  def controller(req:Request[IO])(implicit ctx:NodeContext) = for {
     arrivalTime      <- IO.realTime.map(_.toMillis)
     arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
     currentState     <- ctx.state.get
@@ -391,7 +391,7 @@ object PullController {
     //    )
   } yield response
 
-  def apply()(implicit ctx:NodeContextV6) = {
+  def apply()(implicit ctx:NodeContext) = {
 
     HttpRoutes.of[IO]{
       case req@POST -> Root => for {

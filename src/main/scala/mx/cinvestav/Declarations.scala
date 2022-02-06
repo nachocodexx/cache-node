@@ -1,7 +1,7 @@
 package mx.cinvestav
 
 import cats.data.EitherT
-import cats.effect.std.{Queue, Semaphore}
+import cats.effect.std.Semaphore
 import cats.effect.{IO, Ref}
 import com.dropbox.core.v2.DbxClientV2
 import io.chrisdavenport.mules.MemoryCache
@@ -9,25 +9,19 @@ import mx.cinvestav.commons.events.{Del, ObjectHashing, Push, Pull => PullEvent,
 import org.http4s.client.Client
 
 import java.nio.file.Path
-//import mx.cinvestav.Declarations.{EventX, Get, Put}
-import mx.cinvestav.cache.CacheX.CacheItem
 import mx.cinvestav.commons.events.{EventX, Get, Put}
 //
 import io.circe._
 import io.circe.syntax._
 //
-import mx.cinvestav.cache.CacheX.ICache
-import mx.cinvestav.commons.balancer
-import mx.cinvestav.commons.balancer.v2.Balancer
 import mx.cinvestav.commons.errors.NodeError
 import mx.cinvestav.commons.fileX.FileMetadata
 import mx.cinvestav.commons.status.Status
 import mx.cinvestav.config.DefaultConfigV5
 import mx.cinvestav.commons.compression
-import org.http4s.{AuthedRequest, Request}
+import org.http4s.AuthedRequest
 import org.typelevel.log4cats.Logger
-
-import java.io.{ByteArrayOutputStream, File}
+import java.io.File
 import java.util.UUID
 import io.circe._
 import io.circe.generic.auto._
@@ -158,19 +152,19 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
 //
 //  case class RabbitContext(client:RabbitClient[IO],connection:AMQPConnection)
 
-  case class NodeContextV6(
+  case class NodeContext(
                             config: DefaultConfigV5,
                             logger: Logger[IO],
                             errorLogger:Logger[IO],
                             state:Ref[IO,NodeStateV6],
                             client:Client[IO]
                           )
-  case class NodeContextV5(
-                            config: DefaultConfigV5,
-                            logger: Logger[IO],
-                            state:Ref[IO,NodeStateV5],
-//                            rabbitMQContext: RabbitMQContext
-                          )
+//  case class NodeContextV5(
+//                            config: DefaultConfigV5,
+//                            logger: Logger[IO],
+//                            state:Ref[IO,NodeStateV5],
+////                            rabbitMQContext: RabbitMQContext
+//                          )
 
 
   case class ProposedElement(guid:String,hits:Int)
@@ -212,32 +206,32 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                           s:Semaphore[IO],
                           experimentId:String
                         )
-  case class NodeStateV5(
-                          levelId:String,
-                          status:Status,
-                          cacheNodes: List[String] = List.empty[String],
-//                          loadBalancer: balancer.LoadBalancer,
-//                          loadBalancerPublisherZero:PublisherV2,
-//                          loadBalancerPublisherOne:PublisherV2,
-//                          cacheNodePubs:Map[String,PublisherV2],
-//                          syncNodePubs:Map[String,PublisherV2],
-                          syncLB:Balancer[String],
-                          ip:String = "127.0.0.1",
-                          availableResources:Int,
-//
-                          totalStorageSpace:Long=1000000000,
-//                          freeStorageSpace:Long,
-                          usedStorageSpace:Long,
-                          availableStorageSpace:Long,
-//                          replicationStrategy:String,
-                          cache: MemoryCache[IO,String,Int],
-                          currentEntries:Ref[IO,List[String]],
-                          cacheSize:Int,
-                          downloadCounter:Int=0,
-                          transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
-                          queue:Queue[IO,RequestX],
-                          currentOperationId:Option[Int],
-                          cacheX:ICache[IO,ObjectS],
-                          experimentId:String
-                      )
+//  case class NodeStateV5(
+//                          levelId:String,
+//                          status:Status,
+//                          cacheNodes: List[String] = List.empty[String],
+////                          loadBalancer: balancer.LoadBalancer,
+////                          loadBalancerPublisherZero:PublisherV2,
+////                          loadBalancerPublisherOne:PublisherV2,
+////                          cacheNodePubs:Map[String,PublisherV2],
+////                          syncNodePubs:Map[String,PublisherV2],
+//                          syncLB:Balancer[String],
+//                          ip:String = "127.0.0.1",
+//                          availableResources:Int,
+////
+//                          totalStorageSpace:Long=1000000000,
+////                          freeStorageSpace:Long,
+//                          usedStorageSpace:Long,
+//                          availableStorageSpace:Long,
+////                          replicationStrategy:String,
+//                          cache: MemoryCache[IO,String,Int],
+//                          currentEntries:Ref[IO,List[String]],
+//                          cacheSize:Int,
+//                          downloadCounter:Int=0,
+//                          transactions:Map[String,CacheTransaction]= Map.empty[String,CacheTransaction],
+//                          queue:Queue[IO,RequestX],
+//                          currentOperationId:Option[Int],
+//                          cacheX:ICache[IO,ObjectS],
+//                          experimentId:String
+//                      )
 }

@@ -106,170 +106,149 @@ object DownloadController {
 //            }
 //          } yield (false)
 
-          retryPolicy     = RetryPolicies.limitRetries[IO](1) join RetryPolicies.exponentialBackoff[IO](0.1 seconds)
-          elementBytes    <- retryingOnAllErrors[Array[Byte]](
-            policy = retryPolicy,
-            onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage+s"  $guid")
-          )(elementBytesIO)
-
-
-
-
-          cloudEndAt           <- IO.realTime.map(_.toMillis)
-          cloudEndAtNanos      <- IO.monotonic.map(_.toNanos)
-          pullServiceTimeNanos = cloudEndAtNanos - cloudStartAtNanos
-          _                    <- ctx.logger.info(s"PULL $guid ${elementBytes.length} $pullServiceTimeNanos $operationId")
-          //        PUT
-          putStartAtNanos      <- IO.monotonic.map(_.toNanos)
-          meta = Map("extension" -> objectExt)
-          newObject <- if(ctx.config.inMemory) ObjectS(guid=guid, bytes=elementBytes, metadata = meta).asInstanceOf[IObject].pure[IO]
-          else for {
-            _    <- IO.unit
-            path = Paths.get(s"${ctx.config.storagePath}/$guid")
-            _    <- Stream.emits(elementBytes).through(Files[IO].writeAll(path)).covary[IO].compile.drain
-            o    = ObjectD(guid=guid, path = path, metadata = meta).asInstanceOf[IObject]
-          } yield o
-          _                   <- currentState.cache.insert(guid,newObject)
-          _maybeEvictedObject <- IO.delay(CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy))
-          maybeEvictedObject  <- _maybeEvictedObject.traverse(currentState.cache.lookup).map(_.flatten)
-          putEndAt            <- IO.realTime.map(_.toMillis)
-          putEndAtNanos       <- IO.monotonic.map(_.toNanos)
-          putServiceTimeNanos = putEndAtNanos - putStartAtNanos
-          newObjectSize = elementBytes.length
-          //
-          put = Put(
-            serialNumber = 0,
-            nodeId = currentNodeId,
-            objectId = newObject.guid,
-            objectSize = newObjectSize,
-            timestamp = putEndAt,
-            serviceTimeNanos = putServiceTimeNanos,
-            correlationId = correlationId
-          )
-          _get = Get(
-          serialNumber = 0,
-          nodeId = currentNodeId,
-          objectId = newObject.guid,
-          objectSize = newObjectSize,
-          timestamp = putEndAt+1,
-          serviceTimeNanos = getStNanos,
-          correlationId = correlationId
-          )
-          evictionHeaders <- maybeEvictedObject match {
-            case Some(evictedObject) =>  for {
-              //            PUSH EVICTED OBJECT TO CLOUD
-              evictedBytes <- evictedObject match {
-                case o@ObjectD(guid, path, metadata) => Files[IO].readAll(path,chunkSize=8192).compile.to(Array)
-                case o@ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+//          retryPolicy     = RetryPolicies.limitRetries[IO](1) join RetryPolicies.exponentialBackoff[IO](0.1 seconds)
+//          elementBytes    <- retryingOnAllErrors[Array[Byte]](
+//            policy = retryPolicy,
+//            onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage+s"  $guid")
+//          )(elementBytesIO)
+          response <- elementBytesIO.flatMap{ elementBytes=>
+            for {
+              _ <- IO.unit
+              cloudEndAt           <- IO.realTime.map(_.toMillis)
+              cloudEndAtNanos      <- IO.monotonic.map(_.toNanos)
+              pullServiceTimeNanos = cloudEndAtNanos - cloudStartAtNanos
+              _                    <- ctx.logger.info(s"PULL $guid ${elementBytes.length} $pullServiceTimeNanos $operationId")
+              //        PUT
+              putStartAtNanos      <- IO.monotonic.map(_.toNanos)
+              meta = Map("extension" -> objectExt)
+              newObject <- if(ctx.config.inMemory) ObjectS(guid=guid, bytes=elementBytes, metadata = meta).asInstanceOf[IObject].pure[IO]
+              else {
+                for {
+                  _    <- IO.unit
+                  path = Paths.get(s"${ctx.config.storagePath}/$guid")
+                  _    <- Stream.emits(elementBytes).through(Files[IO].writeAll(path)).covary[IO].compile.drain
+                  o    = ObjectD(guid=guid, path = path, metadata = meta).asInstanceOf[IObject]
+                } yield o
               }
-              evictedObjectSize =evictedBytes.length
-              pushEventsFiber             <- Helpers.pushToNextLevel(evictedObject.guid,evictedBytes,evictedObject.metadata, currentEvents, correlationId).start
-              //                  //             DELETE EVICTED FROM CACHE
-              deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
-              _                      <- evictedObject match {
-                case ObjectD(guid, path, metadata) => Files[IO].delete(path) *> currentState.cache.delete(guid)
-                case ObjectS(guid, bytes, metadata) => currentState.cache.delete(guid)
-              }
-//                  _                      <-
-              deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
-              deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
-              //
-              delEvent = Del(
+              _                   <- currentState.cache.insert(guid,newObject)
+              _maybeEvictedObject <- IO.delay(CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy))
+              maybeEvictedObject  <- _maybeEvictedObject.traverse(currentState.cache.lookup).map(_.flatten)
+              putEndAt            <- IO.realTime.map(_.toMillis)
+              putEndAtNanos       <- IO.monotonic.map(_.toNanos)
+              putServiceTimeNanos = putEndAtNanos - putStartAtNanos
+              newObjectSize       = elementBytes.length
+              put                 = Put(
                 serialNumber = 0,
                 nodeId = currentNodeId,
-                objectId = evictedObject.guid,
-                objectSize = evictedBytes.length,
-                timestamp = cloudEndAt-10,
-                serviceTimeNanos= deleteServiceTimeNanos,
+                objectId = newObject.guid,
+                objectSize = newObjectSize,
+                timestamp = putEndAt,
+                serviceTimeNanos = putServiceTimeNanos,
                 correlationId = correlationId
               )
-              _ <- Events.saveEvents(
-                events =   List(
-                  PullEvent(
-                    //                        eventId = UUID.randomUUID().toString,
+              _get                = Get(
+                serialNumber = 0,
+                nodeId = currentNodeId,
+                objectId = newObject.guid,
+                objectSize = newObjectSize,
+                timestamp = putEndAt+1,
+                serviceTimeNanos = getStNanos,
+                correlationId = correlationId
+              )
+              evictionHeaders     <- maybeEvictedObject match {
+                case Some(evictedObject) =>  for {
+                  //            PUSH EVICTED OBJECT TO CLOUD
+                  evictedBytes <- evictedObject match {
+                    case o@ObjectD(guid, path, metadata) => Files[IO].readAll(path,chunkSize=8192).compile.to(Array)
+                    case o@ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+                  }
+                  evictedObjectSize =evictedBytes.length
+                  pushEventsFiber             <- Helpers.pushToNextLevel(evictedObject.guid,evictedBytes,evictedObject.metadata, currentEvents, correlationId).start
+                  //                  //             DELETE EVICTED FROM CACHE
+                  deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
+                  _                      <- evictedObject match {
+                    case ObjectD(guid, path, metadata) => Files[IO].delete(path) *> currentState.cache.delete(guid)
+                    case ObjectS(guid, bytes, metadata) => currentState.cache.delete(guid)
+                  }
+                  //                  _                      <-
+                  deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
+                  deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
+                  //
+                  delEvent = Del(
                     serialNumber = 0,
-                    nodeId = ctx.config.nodeId,
-                    objectId = newObject.guid,
-                    objectSize = newObjectSize,
-                    pullFrom = "Dropbox",
-                    timestamp = cloudEndAt,
-                    serviceTimeNanos = pullServiceTimeNanos,
+                    nodeId = currentNodeId,
+                    objectId = evictedObject.guid,
+                    objectSize = evictedBytes.length,
+                    timestamp = cloudEndAt-10,
+                    serviceTimeNanos= deleteServiceTimeNanos,
                     correlationId = correlationId
-                  ),
-                  delEvent,
-                  put,
-                  _get
-//                  Put(
-//                    //                        eventId = UUID.randomUUID().toString,
-//                    serialNumber = 0,
-//                    nodeId = currentNodeId,
-//                    objectId = newObject.guid,
-//                    objectSize = newObjectSize,
-//                    timestamp = putEndAt,
-//                    serviceTimeNanos = putServiceTimeNanos,
-//                    correlationId = correlationId
-//                  ),
-//                  Get(
-//                    serialNumber = 0 ,
-//                    nodeId = currentNodeId,
-//                    objectId = newObject.guid,
-//                    objectSize = newObjectSize,
-//                    timestamp = putEndAt+1,
-//                    serviceTimeNanos = getStNanos,
-//                    correlationId = correlationId
-//                  )
-                )
+                  )
+                  _ <- Events.saveEvents(
+                    events =   List(
+                      PullEvent(
+                        serialNumber = 0,
+                        nodeId = ctx.config.nodeId,
+                        objectId = newObject.guid,
+                        objectSize = newObjectSize,
+                        pullFrom = "Dropbox",
+                        timestamp = cloudEndAt,
+                        serviceTimeNanos = pullServiceTimeNanos,
+                        correlationId = correlationId
+                      ),
+                      delEvent,
+                      put,
+                      _get
+                    )
+                  )
+                  evictionHeaders = Headers(
+                    Header.Raw(CIString("Evicted-Object-Id"),evictedObject.guid),
+                    Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
+                  )
+                  //                      SEND EVIVTED
+                  _ <- ctx.config.pool.sendEvicted(delEvent).start
+                } yield evictionHeaders
+                case None => for {
+                  _            <- IO.unit
+                  _ <- Events.saveEvents(
+                    events = List(
+                      PullEvent(
+                        serialNumber = 0 ,
+                        nodeId = ctx.config.nodeId,
+                        objectId = newObject.guid,
+                        objectSize = newObjectSize,
+                        pullFrom = "Dropbox",
+                        timestamp = cloudEndAt,
+                        serviceTimeNanos = pullServiceTimeNanos,
+                        correlationId = correlationId
+                      ),
+                      put
+                    )
+                  )
+                  emptyHeaders = Headers.empty
+                } yield emptyHeaders
+              }
+              putAndGet           = PutAndGet(
+                put = put,
+                get = _get
               )
-              evictionHeaders = Headers(
-                Header.Raw(CIString("Evicted-Object-Id"),evictedObject.guid),
-                Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
-              )
-              //                      SEND EVIVTED
-              _ <- ctx.config.pool.sendEvicted(delEvent).start
-            } yield evictionHeaders
-            case None => for {
-              _            <- IO.unit
-              _ <- Events.saveEvents(
-                events = List(
-                  PullEvent(
-                    serialNumber = 0 ,
-                    nodeId = ctx.config.nodeId,
-                    objectId = newObject.guid,
-                    objectSize = newObjectSize,
-                    pullFrom = "Dropbox",
-                    timestamp = cloudEndAt,
-                    serviceTimeNanos = pullServiceTimeNanos,
-                    correlationId = correlationId
-                  ),
-                  put
-                )
-              )
-              emptyHeaders = Headers.empty
-            } yield emptyHeaders
-            //                  IO.pure(Headers.empty)
+              _                   <- ctx.config.pool.sendPut(putAndGet)
+              getServiceTimeNanos <- IO.monotonic.map(_.toNanos).map(_ - arrivalTimeNanos)
+              _                   <- ctx.logger.info(s"GET $guid ${newObjectSize} $getServiceTimeNanos $operationId")
+              response            <- Ok(Stream.emits(elementBytes).covary[IO], Headers(
+                  Header.Raw(CIString("Object-Id"), guid),
+                  Header.Raw(CIString("Object-Size"),newObjectSize.toString ),
+                  Header.Raw(CIString("Level"), if(ctx.config.cloudEnabled) "CLOUD" else "CACHE"),
+                  Headers(Header.Raw(CIString("Node-Id"),ctx.config.nodeId) )
+                ) ++ evictionHeaders)
+            } yield response
           }
-//          _get = Get(
-//            se
-//          )
-          putAndGet = PutAndGet(
-            put = put,
-            get = _get
-          )
-          _ <- ctx.config.pool.sendPut(putAndGet)
-          getServiceTimeNanos  <- IO.monotonic.map(_.toNanos).map(_ - arrivalTimeNanos)
-          _              <- ctx.logger.info(s"GET $guid ${newObjectSize} $getServiceTimeNanos $operationId")
-          response       <- Ok(Stream.emits(elementBytes).covary[IO],
-            Headers(
-              Header.Raw(CIString("Object-Id"), guid),
-              Header.Raw(CIString("Object-Size"),newObjectSize.toString ),
-              Header.Raw(CIString("Level"), if(ctx.config.cloudEnabled) "CLOUD" else "CACHE"),
-              Headers(Header.Raw(CIString("Node-Id"),ctx.config.nodeId) )
-            ) ++ evictionHeaders
-          )
-//            } yield response
-//          }
+            .handleErrorWith{ e=>NotFound() }
+//            retryingOnAllErrors[Array[Byte]](
+//            policy = retryPolicy,
+//            onError = (e:Throwable,d:RetryDetails) => ctx.errorLogger.error(e.getMessage+s"  $guid")
+//          )(elementBytesIO)
+          //
         } yield response
-
 
       }
     } yield res

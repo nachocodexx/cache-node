@@ -13,6 +13,46 @@ import scala.concurrent.duration._
 import language.postfixOps
 
 object Events {
+//
+  def calculateVolumeByUser(events:List[EventX]): Map[String, Double] = {
+    val puts              = onlyPuts(events=events).map(_.asInstanceOf[Put])
+    val counterByObjectId = getCounterByObjecId(events=events)
+    val dumbObjectsByUser = puts.groupBy(_.userId).map{
+      case (userId,fs) => userId -> fs.map(x=>DumbObject(x.objectId,x.objectSize))
+    }
+    dumbObjectsByUser.map {
+      case (userId, objects)=>
+        userId -> objects.map(o=>counterByObjectId.getOrElse(o.objectId,0) * o.objectSize).sum.toDouble/1048576.0
+    }
+  }
+//
+  def calculateDensityByUser(events:List[EventX]): Map[String, Double] = {
+    val puts               = onlyPuts(events=events).map(_.asInstanceOf[Put])
+    val dumbObjectsByUser = puts.groupBy(_.userId).map{
+      case (userId,fs) => userId -> fs.map(x=>x.objectId)
+    }
+    val getsByObjectsIdMap = getsByObjecId(events=events)
+    dumbObjectsByUser map {
+      case (userId, os) =>
+        val gets = os.flatMap(objectId => getsByObjectsIdMap.getOrElse(objectId,List.empty[Get])).map(_.asInstanceOf[EventX])
+        val ats  = EventXOps.getMeanInterArrivalTime(events=gets)
+        userId -> ats/1000000000.0
+    }
+  }
+
+  def getsByObjecId(events:List[EventX]): Map[String, List[Get]] = {
+    val gets = onlyGets(events=events).map(_.asInstanceOf[Get])
+    gets.groupBy(_.objectId).map{
+      case (objectId, gs) => objectId -> gs
+    }
+  }
+
+  def getCounterByObjecId(events:List[EventX]): Map[String, Int] = {
+    val gets = onlyGets(events=events).map(_.asInstanceOf[Get])
+    gets.groupBy(_.objectId).map{
+      case (objectId, gs) => objectId -> gs.length
+    }
+  }
 // _____________________________________________________________________________________________________________
   def getDownloadsByIntervalByObjectId(objectId:String)(period:FiniteDuration)(events:List[EventX]) = {
     val es = onlyGets(events=events).map(_.asInstanceOf[Get]).filter(_.objectId == objectId).map(_.asInstanceOf[EventX])
@@ -195,6 +235,10 @@ object Events {
 //
 
 //
+  def getProducerIdByObjectId(objectId:String,events:List[EventX]): Option[String] = {
+    val puts = onlyPuts(events=events).map(_.asInstanceOf[Put])
+    puts.find(_.objectId == objectId).map(_.userId)
+  }
   def onlyPuts(events:List[EventX]) = events.filter{
     case _:Put => true
     case _ => false

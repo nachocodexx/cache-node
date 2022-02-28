@@ -1,11 +1,13 @@
 package mx.cinvestav.server.controllers
 
 import breeze.linalg.sum
+import cats.implicits._
 import cats.effect._
 import io.circe._
 import io.circe.generic.auto._
 import io.circe.syntax._
 import mx.cinvestav.commons.events.EventXOps
+import mx.cinvestav.commons.types.QueueTimes
 //
 import mx.cinvestav.Declarations.NodeContext
 import mx.cinvestav.Helpers
@@ -23,53 +25,40 @@ import scala.concurrent.duration._
 import language.postfixOps
 
 object HitCounterController {
+//  implicit val hitCounterInfoEncoder = new Encoder[HitCounterInfo] {
+//    override def apply(a: HitCounterInfo): Json =  Json.obj(
+//        "nodeId"  -> a.nodeId.asJson,
+//      "objectIds"          -> Json.Null,
+//      "userIds"            -> Json.Null,
+//      "hitCounter"         -> Json.Null,
+//      "normalizeCounter"   -> Json.Null,
+//      "hitCounterByUser"   -> Json.Null,
+//      "objectSizes"        -> Json.Null,
+//      "nextNumberOfAccess" -> Json.Null,
+//      "uploadQueueTimes"   -> Json.Null,
+//      "downloadQueueTimes" -> Json.Null,
+//      "globalQueueTimes"   -> Json.Null
+//
+//    )
+//  }
   def apply()(implicit ctx:NodeContext) = {
     HttpRoutes.of[IO]{
       case req@GET -> Root / "hit-counter"=> for {
+//        currentMonotinic            <- IO.monotonic.map(_.toNanos)
         currentState                <- ctx.state.get
-        headers                     = req.headers
-        calculateNextNumberOfAccess = headers.get(CIString("Calculate-Next-Access")).flatMap(_.head.value.toBooleanOption).getOrElse(false)
-        calculateServiceTime        = headers.get(CIString("Calculate-Service-Time")).flatMap(_.head.value.toBooleanOption).getOrElse(false)
+//        headers                     = req.headers
+//        calculateNextNumberOfAccess = headers.get(CIString("Calculate-Next-Access")).flatMap(_.head.value.toBooleanOption).getOrElse(false)
+//        calculateServiceTime        = headers.get(CIString("Calculate-Service-Time")).flatMap(_.head.value.toBooleanOption).getOrElse(false)
         events                      = Events.relativeInterpretEventsMonotonic(events=currentState.events)
-        objectIds                   = Events.getObjectIds(events=events)
-        dumbObjects                 = Events.getDumbObjects(events=events)
-        counter                     = Events.getHitCounterByNodeV2(events=events)
-        mx                          = Events.generateMatrixV2(events=events)
-        puts                        = onlyPuts(events = events).map(_.asInstanceOf[Put])
-        userIds                     = puts.map(_.userId).distinct
-        xSum                        = sum(mx)
-        x                           = if(xSum == 0.0) mx.toArray.toList.map(_=>0.0) else (mx/xSum).toArray.toList
-        y                           = Events.getHitCounterByUser(events=events)
-        normalizeCounter            = (objectIds zip x).toMap
-        objectSizes                 = dumbObjects.map{
-          case o@DumbObject(objectId, objectSize) =>
-            (objectId -> objectSize)
-        }.toMap
-
-        nextNumberOfAccess = if(calculateNextNumberOfAccess)
-          Helpers.generateNextNumberOfAccessByObjectId(events=events)(ctx.config.intervalMs milliseconds)
-        else Map.empty[String,Double]
-
-        meanServiceTime = if(events.isEmpty) 0.0 else EventXOps.getMeanServiceTime(events = events)
-        meanWaitingTime = if(events.isEmpty) 0.0 else EventXOps.getMeanWaitingTime(events = events)
-        meanArrivalTime = if (events.isEmpty) 0.0 else EventXOps.getMeanArrivalTime(events = events)
-        meanIdleTime    = if(events.isEmpty) 0.0 else EventXOps.getMeanIdleTime(events  = events)
-
-        hitVec = HitCounterInfo(
-          nodeId             = ctx.config.nodeId,
-          objectIds          = objectIds,
-          userIds            = userIds,
-          hitCounter         = counter,
-          normalizeCounter   = normalizeCounter,
-          hitCounterByUser   = y,
-          objectSizes        = objectSizes,
-          nextNumberOfAccess = nextNumberOfAccess,
-          meanServiceTime    = meanServiceTime,
-          meanWaitingTime    = meanWaitingTime,
-          meanArrivalTime    = meanArrivalTime,
-          meanIdleTime       = meanIdleTime
-        )
-        res <- Ok(hitVec.asJson)
+        hitVec                      <- Helpers.getHitInfo(
+          nodeId = ctx.config.nodeId,
+          events = events,
+          period =  ctx.config.intervalMs milliseconds
+        ).handleErrorWith{ e=>
+           ctx.logger.error(e.getMessage) *> ctx.logger.error(e.getStackTrace.mkString("Array(", ", ", ")")) *> HitCounterInfo.empty.pure[IO]
+        }
+        resJson = hitVec.asJson
+        res <- Ok(resJson)
       } yield res
     }
   }

@@ -39,22 +39,23 @@ object InfoRoutes {
         ufCacheSize          = UF.calculate(total= cacheSize,used= usedCacheSize,objectSize=0)
         cachePolicy          = ctx.config.cachePolicy
         info                = NodeInfo(
-          RAMInfo = ramInfo,
-          JVMMemoryInfo = jvmRamInfo,
-          systemCPUUsage = systemCpu,
-          cpuUsage = cpu,
-          RAMUf = ufRAM,
-          cacheSize = cacheSize,
-          usedCacheSize = usedCacheSize,
-          availableCacheSize = availableCacheSize,
-          ufCacheSize = ufCacheSize,
-          cachePolicy = cachePolicy,
-          totalStortageCapacity = totalStorageCapacity,
-          usedStorageCapacity = usedStorageCapacity,
+          RAMInfo                  = ramInfo,
+          JVMMemoryInfo            = jvmRamInfo,
+          systemCPUUsage           = systemCpu,
+          cpuUsage                 = cpu,
+          RAMUf                    = ufRAM,
+          cacheSize                = cacheSize,
+          usedCacheSize            = usedCacheSize,
+          availableCacheSize       = availableCacheSize,
+          ufCacheSize              = ufCacheSize,
+          cachePolicy              = cachePolicy,
+          totalStortageCapacity    = totalStorageCapacity,
+          usedStorageCapacity      = usedStorageCapacity,
           availableStorageCapacity = availableStorageCapacity,
-          ufStorageCapacity = ufStorageCapacity,
-          nodeId = ctx.config.nodeId
+          ufStorageCapacity        = ufStorageCapacity,
+          nodeId                   = ctx.config.nodeId
         ).asJson
+//        _   <- ctx.logger.debug(info.toString)
         res <- Ok(info)
       } yield res
     }

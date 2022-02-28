@@ -94,9 +94,9 @@ case class Pool(hostname:String,port:Int) {
   def addNodeUri = s"http://$hostname:$port/api/v2/add-node"
   def evictedUri = s"http://$hostname:$port/api/v2/evicted"
   def putUri = s"$httpURL/api/v2/put"
-  def monirotingUrl(nodeId:String) = s"$httpURL/api/v7/monitoring/$nodeId"
+  def monirotingUrl(nodeId:String) = s"$httpURL/api/v2/monitoring/$nodeId"
   def uploadUri = s"$httpURL/api/v2/upload"
-  def downloadUri(objectId:String) = s"$httpURL/api/v7/download/$objectId"
+  def downloadUri(objectId:String) = s"$httpURL/api/v2/download/$objectId"
 
   def sendPut(put:PutAndGet)(implicit ctx:NodeContext) = for {
     _                  <- IO.unit
@@ -282,6 +282,10 @@ case class DefaultConfigV5(
                             cachePool:Pool,
                             apiVersion:Int,
                             serviceReplicator: ServiceReplicator,
-                            intervalMs:Long
+                            intervalMs:Long,
+                            maxConnections:Int,
+                            bufferSize:Int,
+                            responseHeaderTimeoutMs:Long,
+                            systemReplicatorStarted:Boolean,
                         )
 

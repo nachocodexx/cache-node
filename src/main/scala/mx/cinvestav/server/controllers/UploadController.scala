@@ -9,7 +9,7 @@ import cats.effect.std.Semaphore
 import mx.cinvestav.Declarations.{IObject, ObjectD}
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.ObjectHashing
-import org.http4s.AuthedRequest
+import org.http4s.{AuthedRequest, Response}
 
 import java.nio.file.Paths
 //
@@ -41,8 +41,8 @@ import language.postfixOps
 object UploadController {
 
 
-  def controller(operationId:String, objectId:String)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext)= for {
-      arrivalTime      <- IO.realTime.map(_.toMillis)
+  def controller(operationId:String, objectId:String)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext): IO[Response[IO]] = for {
+//      arrivalTime      <- IO.realTime.map(_.toMillis)
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
       currentEvents    = Events.relativeInterpretEvents(currentState.events)
@@ -60,31 +60,39 @@ object UploadController {
           media           = MediaType.unsafeParse(contentType)
           objectExtension = media.fileExtensions.head
           body            = part.body
-          bytesBuffer     <- body.compile.to(Array)
           objectSize  = partHeaders
             .get(org.http4s.headers.`Content-Length`.name)
             .map(_.head.value)
             .getOrElse("0")
 
-          newObject <- if(!ctx.config.inMemory) for {
-            _    <- IO.unit
-            meta = Map("objectSize"->objectSize, "contentType" -> contentType, "extension" -> objectExtension)
-            path = Paths.get(s"${ctx.config.storagePath}/$objectId")
-            o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
-            _    <- Stream.emits(bytesBuffer).covary[IO].through(Files[IO].writeAll(path)).compile.drain
-          } yield o
-          else ObjectS(
-            guid=objectId,
-            bytes= bytesBuffer,
-            metadata=Map(
-              "objectSize"->objectSize,
-              "contentType" -> contentType,
-              "extension" -> objectExtension
-            )
-          ).asInstanceOf[IObject].pure[IO]
+          newObject <- if(!ctx.config.inMemory) {
+            for {
+              _    <- IO.unit
+              meta = Map("objectSize"->objectSize, "contentType" -> contentType, "extension" -> objectExtension)
+              path = Paths.get(s"${ctx.config.storagePath}/$objectId")
+              o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
+//              _    <- Stream.emits(bytesBuffer).covary[IO].through(Files[IO].writeAll(path)).compile.drain
+              _    <- body.through(Files[IO].writeAll(path)).compile.drain
+            } yield o
+          }
+          else {
+            for {
+              bytesBuffer  <- body.compile.to(Array)
+              o = ObjectS(
+               guid=objectId,
+               bytes= bytesBuffer,
+               metadata=Map(
+                 "objectSize"->objectSize,
+                 "contentType" -> contentType,
+                 "extension" -> objectExtension
+               )
+             ).asInstanceOf[IObject]
+            } yield o
+          }
           //        PUT TO CACHE
           evictedElement  <- IO.delay{CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)}
           now             <- IO.realTime.map(_.toMillis)
+
           newHeaders      <- evictedElement match {
             case Some(evictedObjectId) => for {
               maybeEvictedObject <- currentState.cache.lookup(evictedObjectId)
@@ -102,7 +110,7 @@ object UploadController {
                       case _:ObjectD => true
                       case _:ObjectS => false
                     }
-                  evictedContentType = MediaType.unsafeParse(evictedObject.metadata.getOrElse("contentType","application/octet-stream"))
+//                  evictedContentType = MediaType.unsafeParse(evictedObject.metadata.getOrElse("contentType","application/octet-stream"))
                    _ <- Helpers.pushToNextLevel(
                       evictedObjectId = evictedObjectId,
                       bytes = evictedObjectBytes,
@@ -120,11 +128,11 @@ object UploadController {
                   deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
                   deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
                   //                PUT NEW OBJECT IN CACHE
-                  putStartAtNanos        <- IO.monotonic.map(_.toNanos)
+//                  putStartAtNanos        <- IO.monotonic.map(_.toNanos)
                   _                      <- currentState.cache.insert(objectId,newObject)
-                  putEndAt               <- IO.realTime.map(_.toMillis)
-                  putEndAtNanos          <- IO.monotonic.map(_.toNanos)
-                  putServiceTimeNanos    = putEndAtNanos - putStartAtNanos
+//                  putEndAt               <- IO.realTime.map(_.toMillis)
+//                  putEndAtNanos          <- IO.monotonic.map(_.toNanos)
+//                  putServiceTimeNanos    = putEndAtNanos - putStartAtNanos
                   delEvent = Del(
                     serialNumber = 0 ,
                     nodeId = ctx.config.nodeId,
@@ -136,22 +144,26 @@ object UploadController {
                   )
                   _ <- Events.saveEvents(
                     List(delEvent,
-                      Put(
-                        serialNumber = 0,
-                        nodeId = ctx.config.nodeId,
-                        objectId = newObject.guid,
-                        objectSize = objectSize.toLong,
-                        timestamp = putEndAt,
-                        serviceTimeNanos = putServiceTimeNanos,
-                        correlationId = operationId
-                      )
-                    ))
+//                      Put(
+//                        serialNumber     = 0,
+//                        nodeId           = ctx.config.nodeId,
+//                        objectId         = newObject.guid,
+//                        objectSize       = objectSize.toLong,
+//                        timestamp        = putEndAt,
+//                        serviceTimeNanos = putServiceTimeNanos,
+//                        correlationId    = operationId,
+//                        userId           = user.id
+//                      )
+                    )
+                  )
 //                  _ <- ctx.logger.info(s"PUT $objectId $objectSize $putServiceTimeNanos $operationId")
                   newHeaders = Headers(
                     Header.Raw(CIString("Evicted-Object-Id"),evictedObjectId),
                     Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
-                    Headers(Header.Raw(CIString("Node-Id"),ctx.config.nodeId )),
-                    Headers(Header.Raw(CIString("Level"),"CLOUD"  )),
+                    Header.Raw(CIString("Node-Id"),ctx.config.nodeId ),
+                    Header.Raw(CIString("Level"),"CLOUD"  ),
+                    Header.Raw(CIString("Object-Size"),objectSize)
+//                    Header.Raw(CIString("User-Id"),"")
 
                   )
                   //                      EVICTED
@@ -160,38 +172,37 @@ object UploadController {
                 case None => for {
                   _ <- ctx.logger.error("WARNING: OBJECT WAS NOT PRESENT IN THE CACHE.")
                 } yield Headers.empty
-                //                    Headers.empty
-                //                  )
               }
             } yield newHeades
             //               NO EVICTION
             case None => for {
               //             PUT NEW OBJECT
-              putStartAtNanos     <- IO.monotonic.map(_.toNanos)
+//              putStartAtNanos     <- IO.monotonic.map(_.toNanos)
               _                   <- currentState.cache.insert(objectId,newObject)
-              putEndAtNanos       <- IO.monotonic.map(_.toNanos)
-              putServiceTimeNanos = putEndAtNanos - putStartAtNanos
-              _ <- Events.saveEvents(
-                events =  List(
-                  Put(
-                    serialNumber = 0,
-                    nodeId = ctx.config.nodeId,
-                    objectId = newObject.guid,
-                    objectSize = objectSize.toLong,
-                    timestamp = now,
-                    serviceTimeNanos = putServiceTimeNanos,
-                    correlationId = operationId
-                  )
-                )
-              )
+//              putEndAtNanos       <- IO.monotonic.map(_.toNanos)
+//              putServiceTimeNanos = putEndAtNanos - putStartAtNanos
+//              _ <- Events.saveEvents(
+//                events =  List(
+//                  Put(
+//                    serialNumber     = 0,
+//                    nodeId           = ctx.config.nodeId,
+//                    objectId         = newObject.guid,
+//                    objectSize       = objectSize.toLong,
+//                    timestamp        = now,
+//                    serviceTimeNanos = putServiceTimeNanos,
+//                    correlationId    = operationId,
+//                    userId           = user.id
+//                  )
+//                )
+//              )
               newHeaders = Headers(
-                Headers(Header.Raw(CIString("Node-Id"),ctx.config.nodeId)),
-                Headers(Header.Raw(CIString("Level"), "LOCAL")),
+                Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+                Header.Raw(CIString("Level"), "LOCAL"),
+                Header.Raw(CIString("Object-Size"),objectSize)
               )
               //                    Headers.empty
             } yield newHeaders
           }
-
           now                 <- IO.realTime.map(_.toMillis)
           nowNanos            <- IO.monotonic.map(_.toNanos)
           //              putServiceTime      = now - arrivalTime
@@ -213,29 +224,63 @@ object UploadController {
   def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
 
     AuthedRoutes.of[User,IO]{
-      case authReq@POST -> Root / "upload" as user => for {
-
-        waitingTimeStartAt <- IO.monotonic.map(_.toNanos)
+      case authReq@POST -> Root / "upload" as user =>
+        val defaultConv = (x:FiniteDuration) => x.toNanos
+        for {
+        serviceTimeStart   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
         _                  <- downloadSemaphore.acquire
-        operationId        = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        objectId           = authReq.req.headers.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        waitingTimeEndAt   <- IO.monotonic.map(_.toNanos)
-        waitingTime        = waitingTimeEndAt - waitingTimeStartAt
-        _                  <- ctx.logger.info(s"WAITING_TIME $objectId 0 $waitingTime $operationId")
-        response0           <- controller(operationId,objectId)(authReq)
-        headers            = response0.headers
+        waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
+        //     ________________________________________________________________
+        req                = authReq.req
+        headers            = req.headers
+        operationId        = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        objectId           = headers.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        arrivalTime        = headers.get(CIString("Arrival-Time")).map(_.head.value).flatMap(_.toLongOption).getOrElse(0L)
         objectSize         = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        _                  <- ctx.logger.debug(s"TRACE_ARRIVAL_TIME $objectId $arrivalTime")
+        _                  <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
+        _                  <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
+//      ___________________________________________________________________________________________
+        response0          <- controller(operationId,objectId)(authReq)
+        headers0           = response0.headers
         _                  <- downloadSemaphore.release
-        serviceTimeNanos   <- IO.monotonic.map(_.toNanos).map(_ - waitingTimeStartAt)
-//      ______________________________________________________________
+//      ____________________________________________________________
+        serviceTimeEnd     <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
+        _                  <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
+//      ____________________________________________________________
+        serviceTime        = serviceTimeEnd - serviceTimeStart
+        _                  <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
+//      ____________________________________________________________
+//        waitingTime        = serviceTimeStart - arrivalTime
+        _                  <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
+        //      ______________________________________________________________________________________
         response           = response0.putHeaders(
           Headers(
             Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
-            Header.Raw(CIString("Service-Time"),serviceTimeNanos.toString)
+            Header.Raw(CIString("Service-Time"),serviceTime.toString),
+            Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
+            Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
           )
         )
-//      ____________________________________________________________
-        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeNanos $operationId")
+        now                <- IO.realTime.map(defaultConv)
+        _                  <- Events.saveEvents(
+          events =  List(
+            Put(
+              serialNumber     = 0,
+              nodeId           = ctx.config.nodeId,
+              objectId         = objectId,
+              objectSize       = objectSize,
+              timestamp        = now,
+              serviceTimeNanos = serviceTime,
+              correlationId    = operationId,
+              userId           = user.id,
+              waitingTime      =  waitingTime,
+              serviceTimeEnd   = serviceTimeEnd ,
+              serviceTimeStart = serviceTimeStart
+            )
+          )
+        )
+        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $waitingTime $operationId")
         _                  <- ctx.logger.debug("____________________________________________________")
       } yield response
     }

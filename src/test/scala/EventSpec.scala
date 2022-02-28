@@ -4,10 +4,13 @@ import cats.effect._
 import mx.cinvestav.commons.events.{Del, EventX, EventXOps, Get, Pull, Put, TransferredTemperature => SetDownloads}
 import mx.cinvestav.events.Events
 import mx.cinvestav.Declarations.Implicits._
+import mx.cinvestav.Helpers
 //
 import io.circe._
 import io.circe.generic.auto._
 import io.circe.syntax._
+import scala.concurrent.duration._
+import language.postfixOps
 class EventSpec  extends munit .CatsEffectSuite {
 
 
@@ -63,36 +66,61 @@ class EventSpec  extends munit .CatsEffectSuite {
     )
 
     val rawEvents = List(
-        basePut,
-        baseGet.copy(objectId = "F0"),
-        baseGet.copy(objectId = "F0"),
-//
-        basePut.copy(objectId = "F1",userId="1"),
-        baseGet.copy(objectId = "F1",userId="2"),
-        baseGet.copy(objectId = "F1",userId="3"),
-        baseGet.copy(objectId = "F1",userId="4"),
-        baseGet.copy(objectId = "F1"),
-//
-        basePut.copy(objectId = "F2"),
-        baseGet.copy(objectId = "F2"),
+      basePut,
+      baseGet.copy(
+          monotonicTimestamp = 23010974823201L
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L,
+        serialNumber = 3,
+        eventId = "event-3"
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L,
+        serialNumber = 4,
+        eventId = "event-4"
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L,
+        serialNumber = 4,
+        eventId = "event-4"
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L,
+        serialNumber = 5,
+        eventId = "event-6"
+      ),
+      baseGet.copy(
+        monotonicTimestamp = 23015933029880L,
+        serialNumber = 7,
+        eventId = "event-7"
+      ),
+
+
+
     )
     val events = Events.relativeInterpretEvents(rawEvents)
 //    println(events)
-//    val x      = Events.getObjectIds(events = events)
+    val  x = Events.getDownloadsByInterval(period = 1 second)(events=events)
+    val  y = Helpers.generateNextNumberOfAccessByObjectId(events=events)(1 second)
+//        Events.getDownloadsByIntervalByObjectId("F0")(1 second)(events=events)
+      println(x)
+      println(y)
+//    val evictedElement0 = Events.LFU(events = events,cacheSize = 3)
+//    val evictedElement1 = Events.LRU(events = events,cacheSize = 3)
+//    val counter = Events.getHitCounterByNodeV2(events=events)
+//    val mx      = Events.generateMatrixV2(events=events)
+//    val x= mx/sum(mx)
+//    val y = Events.getHitCounterByUser(events=events)
+//    println(evictedElement0)
+//    println(evictedElement1)
+//    println(counter)
+//    println(mx)
 //    println(x)
-//    PUT
-    val evictedElement0 = Events.LFU(events = events,cacheSize = 3)
-    val evictedElement1 = Events.LRU(events = events,cacheSize = 3)
-    val counter = Events.getHitCounterByNodeV2(events=events)
-    val mx      = Events.generateMatrixV2(events=events)
-    val x= mx/sum(mx)
-    val y = Events.getHitCounterByUser(events=events)
-    println(evictedElement0)
-    println(evictedElement1)
-    println(counter)
-    println(mx)
-    println(x)
-    println(y)
+//    println(y)
 
 //    val x= EventXOps.OrderOps.byTimestamp(EventXOps.onlyGets(events = events)).map(_.asInstanceOf[Get]).map(_.objectId).distinct
 //    val y = x.last

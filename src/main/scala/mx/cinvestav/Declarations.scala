@@ -84,72 +84,72 @@ object Declarations {
 //
   def liftFF[A]: IO[A] => EitherT[IO, NodeError, A] =  commons.liftFF[A,NodeError]
 //
-  object CommandIds {
-    final val ADD_NODE    = "ADD_NODE"
-    final val REMOVE_NODE = "REMOVE_NODE"
-    final val REPLICATE     = "REPLICATE"
-    final val PULL     = "PULL"
-  final val PULL_DONE     = "PULL_DONE"
-  //
-    final val PROPOSE     = "PROPOSE"
-    final val PREPARE     = "PREPARE"
-    final val PROMISE     = "PROMISE"
-    final val ACCEPT      = "ACCEPT"
-}
+//  object CommandIds {
+//    final val ADD_NODE    = "ADD_NODE"
+//    final val REMOVE_NODE = "REMOVE_NODE"
+//    final val REPLICATE     = "REPLICATE"
+//    final val PULL     = "PULL"
+//  final val PULL_DONE     = "PULL_DONE"
+//  //
+//    final val PROPOSE     = "PROPOSE"
+//    final val PREPARE     = "PREPARE"
+//    final val PROMISE     = "PROMISE"
+//    final val ACCEPT      = "ACCEPT"
+//}
 
-  object Payloads {
-    case class RemoveStorageNode(storageNodeId:String)
-    case class AddStorageNode(storageNodeId:String)
-    case class Prepare(
-                        operationId:Int,
-                        guid:String,
-                        timestamp:Long
-                      )
-    case class Propose(
-                        guid:String,
-                        url:String,
-                        proposedElement: ProposedElement,
-                        timestamp:Long,
-                      )
-    case class Promise(
-                        guid:String,
-                        timestamp:Long,
-                        proposedElement: ProposedElement,
-                        uploadUrl:String
-                      )
-    case class Accept(
-                       guid:String,
-                       url:String,
-                       timestamp:Long,
-                       proposedElement: ProposedElement
-                     )
-
-    case class PullDone(guid:String,evictedItemPath:String,timestamp:Long)
-    case class Pull(
-                       guid:String,
-                       url:String,
-                       userId:String,
-                       bucketName:String,
-                       compressionAlgorithm:String,
-                       evictedItemPath:String,
-                       timestamp:Long,
-                     )
-  }
-  case class StorageNode(poolId:String,nodeId:String)
+//  object Payloads {
+//    case class RemoveStorageNode(storageNodeId:String)
+//    case class AddStorageNode(storageNodeId:String)
+//    case class Prepare(
+//                        operationId:Int,
+//                        guid:String,
+//                        timestamp:Long
+//                      )
+//    case class Propose(
+//                        guid:String,
+//                        url:String,
+//                        proposedElement: ProposedElement,
+//                        timestamp:Long,
+//                      )
+//    case class Promise(
+//                        guid:String,
+//                        timestamp:Long,
+//                        proposedElement: ProposedElement,
+//                        uploadUrl:String
+//                      )
+//    case class Accept(
+//                       guid:String,
+//                       url:String,
+//                       timestamp:Long,
+//                       proposedElement: ProposedElement
+//                     )
+//
+//    case class PullDone(guid:String,evictedItemPath:String,timestamp:Long)
+//    case class Pull(
+//                       guid:String,
+//                       url:String,
+//                       userId:String,
+//                       bucketName:String,
+//                       compressionAlgorithm:String,
+//                       evictedItemPath:String,
+//                       timestamp:Long,
+//                     )
+//  }
+//  case class StorageNode(poolId:String,nodeId:String)
   //  __________________________________________________________
 //  trait NodeError extends Error
-  case class TransactionNotFound(transactionId:String) extends NodeError {
-    override def getMessage: String = s"TRANSACTION[$transactionId] not found"
-  }
-  case class BadArguments(message:String) extends NodeError{
-    override def getMessage: String = message
-  }
-  case class DownloadError(message:String) extends NodeError{
-    override def getMessage: String = s"DOWNLOAD_ERROR: $message"
-  }
-//  __________________________________________________________
-case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
-//
+//  case class TransactionNotFound(transactionId:String) extends NodeError {
+//    override def getMessage: String = s"TRANSACTION[$transactionId] not found"
+//  }
+//  case class BadArguments(message:String) extends NodeError{
+//    override def getMessage: String = message
+//  }
+//  case class DownloadError(message:String) extends NodeError{
+//    override def getMessage: String = s"DOWNLOAD_ERROR: $message"
+//  }
+////  __________________________________________________________
+//case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
+////
 //  case class RabbitContext(client:RabbitClient[IO],connection:AMQPConnection)
 
   case class NodeContext(
@@ -157,7 +157,8 @@ case class UploadFileOutput(sink:File,isSlave:Boolean,metadata:FileMetadata)
                             logger: Logger[IO],
                             errorLogger:Logger[IO],
                             state:Ref[IO,NodeStateV6],
-                            client:Client[IO]
+                            client:Client[IO],
+                            initTime:Long = 0L
                           )
 //  case class NodeContextV5(
 //                            config: DefaultConfigV5,

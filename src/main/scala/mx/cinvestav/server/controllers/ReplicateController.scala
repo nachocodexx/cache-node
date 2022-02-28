@@ -1,6 +1,7 @@
 package mx.cinvestav.server.controllers
 import cats.implicits._
 import cats.effect.IO
+import cats.effect.std.Semaphore
 import mx.cinvestav.commons.Implicits._
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.Get
@@ -19,68 +20,102 @@ import org.typelevel.ci.CIString
 
 object ReplicateController {
 
-  def apply()(implicit ctx:NodeContext) = {
+  def apply(semaphore: Semaphore[IO])(implicit ctx:NodeContext) = {
 
     HttpRoutes.of[IO]{
       case req@POST -> Root / "replicate" / objectId => for {
+        serviceTimeStart  <- IO.monotonic.map(_.toNanos)
+        _                 <- semaphore.acquire
+        waitingTime       <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
         currentState      <- ctx.state.get
-        currentEvents     = currentState.events
+//        currentEvents     = currentState.events
         operationId       = UUID.randomUUID().toString
         _                 <- ctx.logger.debug(s"REPLICATE $objectId")
         headers           = req.headers
         maybeReplicaNodes = headers.get(CIString("Nodes")).map(_.map(_.value))
+        objectSize        = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
         response          <- maybeReplicaNodes match {
             case Some(replicaNodes) => for {
               _                   <- ctx.logger.debug(s"FROM $replicaNodes")
+//
               selectedReplicaNode =  replicaNodes.head
               uri                 =  Uri.unsafeFromString(s"http://$selectedReplicaNode:6666/api/v2/download/$objectId")
-//
               _headers            =  Headers(
                 Header.Raw(CIString("Operation-Id"), operationId ) ,
                 Header.Raw(CIString("Object-Id"),objectId),
                 Header.Raw(CIString("User-Id"),UUID.randomUUID().toString),
                 Header.Raw(CIString("Bucket-Id"),UUID.randomUUID().toString),
-                Header.Raw(CIString("Object-Size"),"0"),
+                Header.Raw(CIString("Object-Size"),objectSize.toString),
               )
-//
               request             =  Request[IO](method = Method.GET,uri =uri,headers = _headers)
-              bytes               <- ctx.client.stream(req = request)
-                .evalMap(x=>x.body.compile.to(Array))
+//
+//              (bytes,producerId)               <- ctx.client.stream(req = request)
+                res             <- ctx.client.stream(req = request)
+                .evalMap {
+                  res =>
+                    val hs = res.headers
+                    for {
+//                      bs         <- res.body.compile.to(Array)
+                      _          <- IO.unit
+                      serviceTimeStartD = hs.get(CIString("Service-Time-Start")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+                      serviceTimeEndD   = hs.get(CIString("Service-Time-End")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+                      serviceTimeD      = hs.get(CIString("Service-Time")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+                      waitingTimeD      = hs.get(CIString("Waiting-Time")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+                      producerId        = hs.get(CIString("Producer-Id")).map(_.head.value).getOrElse("PRODUCER_ID")
+                      _put              <- Helpers.uploadObj(
+                        operationId     = operationId,
+                        objectId        = objectId,
+                        objectSize      = objectSize,
+                        bytesBuffer     = res.body,
+                        objectExtension ="",
+                        producerId      = producerId,
+                        waitingTime     = waitingTime
+                      ).onError(e=>ctx.logger.error(e.getMessage))
+                      now               <- IO.realTime.map(_.toNanos)
+                      _get              = Get(
+                        serialNumber       = 0,
+                        nodeId             = selectedReplicaNode,
+                        objectId           = objectId,
+                        objectSize         = objectSize,
+                        timestamp          = now,
+                        serviceTimeNanos   = serviceTimeD,
+                        serviceTimeStart   = serviceTimeStartD,
+                        serviceTimeEnd     = serviceTimeEndD,
+                        waitingTime        = waitingTimeD,
+                        userId             = ctx.config.nodeId,
+                        correlationId      = operationId,
+                        monotonicTimestamp = 0L
+                      )
+                      putAndGet         =  PutAndGet(
+                        put = _put,
+                        get = _get
+                      )
+                      _                 <- ctx.config.pool.sendPut(put= putAndGet)
+                      newResponse       <- NoContent()
+//                    } yield (bs,producerId)
+                    } yield newResponse
+              //                    val _hs = res
+                }
                 .onError{ e =>
                   ctx.logger.error(e.getMessage).pureS
                 }
                 .compile
                 .lastOrError
-              objectSize          =  bytes.length
-              _put                <- Helpers.uploadObj(
-                operationId     = operationId,
-                objectId        = objectId,
-                objectSize      = objectSize,
-                bytesBuffer     = bytes,
-                objectExtension =""
-              ).onError(e=>ctx.logger.error(e.getMessage))
-              now                 <- IO.realTime.map(_.toNanos)
-              _get                = Get(
-                serialNumber = 0,
-                nodeId = selectedReplicaNode,
-                objectId = objectId,
-                objectSize = bytes.length,
-                timestamp = now,
-                serviceTimeNanos = 0L,
-                userId = "SYSTEM",
-                correlationId = operationId,
-                monotonicTimestamp = 0L
-              )
-              putAndGet           =  PutAndGet(
-                put = _put,
-                get = _get
-              )
-              _                   <- ctx.config.pool.sendPut(put= putAndGet)
-              res                 <- NoContent()
             } yield res
             case None => NoContent()
           }
-      } yield response
+        serviceTimeEnd    <- IO.monotonic.map(_.toNanos)
+        _                 <- semaphore.release
+        serviceTime    = serviceTimeEnd-serviceTimeStart
+        newResponse    = response.putHeaders(
+          Headers(
+            Header.Raw(CIString("Service-Time-Start"),serviceTimeStart.toString),
+            Header.Raw(CIString("Service-Time-End"),serviceTimeEnd.toString),
+            Header.Raw(CIString("Service-Time"),serviceTime.toString),
+            Header.Raw(CIString("Waiting-Time"),waitingTime.toString),
+          )
+        )
+      } yield newResponse
     }
   }
 

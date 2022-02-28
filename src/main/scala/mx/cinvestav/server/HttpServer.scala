@@ -36,20 +36,35 @@ import io.circe.generic.auto._
 import io.circe.syntax._
 //
 import scala.concurrent.ExecutionContext.global
+import scala.concurrent.duration._
 import language.postfixOps
 //
 
 class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
   def apiBaseRouteName = s"/api/v${ctx.config.apiVersion}"
 
-  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController() <+> InfoRoutes() <+> HitCounterController() <+> ReplicateController()
+  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController() <+> InfoRoutes() <+> HitCounterController() <+>
+    ReplicateController(dSemaphore)
 
   private def httpApp: Kleisli[IO, Request[IO],
     Response[IO]] = Router[IO](
       s"$apiBaseRouteName" -> AuthMiddlewareX(ctx=ctx)(RouteV6(dSemaphore)),
 //    s"$apiBaseRouteName"
       "/pull" -> PullController(),
-      s"$apiBaseRouteName" -> baseRoutes
+      s"$apiBaseRouteName" -> baseRoutes,
+    "/test" -> HttpRoutes.of[IO]{
+      case req@GET -> Root  => for {
+        _   <- ctx.logger.debug("TEST_ENDPOINT")
+        _   <- dSemaphore.acquire
+        _   <- ctx.logger.debug("TEST_ENDPOINT_START")
+        _   <- IO.sleep(5 second)
+        _   <- ctx.logger.debug("TEST_ENDPOINT_END")
+        _   <- dSemaphore.release
+        _   <- ctx.logger.debug("TEST_ENDPOINT_RELEASE")
+        _   <- ctx.logger.debug("_________________________________________")
+        res <- NoContent()
+      } yield res
+    }
 //        EventsController() <+> ResetController()
 //      "/api/v6/stats" ->StatsController(),
 //      "/api/v6/events" -> EventsController(),
@@ -60,6 +75,9 @@ class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
     _ <- BlazeServerBuilder[IO](executionContext = global)
       .bindHttp(ctx.config.port,ctx.config.host)
       .withHttpApp(httpApp = httpApp)
+      .withMaxConnections(ctx.config.maxConnections)
+      .withResponseHeaderTimeout(ctx.config.responseHeaderTimeoutMs milliseconds)
+      .withBufferSize(ctx.config.bufferSize)
       .serve
       .compile
       .drain

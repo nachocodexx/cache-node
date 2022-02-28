@@ -45,7 +45,8 @@ object UploadController {
 //      arrivalTime      <- IO.realTime.map(_.toMillis)
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
-      currentEvents    = Events.relativeInterpretEvents(currentState.events)
+//      currentEvents    = Events.relativeInterpretEvents(currentState.events)
+      currentEvents    = Events.relativeInterpretEventsMonotonic(currentState.events)
       req              = authReq.req
       user             = authReq.context
       multipart        <- req.as[Multipart[IO]]
@@ -243,7 +244,6 @@ object UploadController {
 //      ___________________________________________________________________________________________
         response0          <- controller(operationId,objectId)(authReq)
         headers0           = response0.headers
-        _                  <- downloadSemaphore.release
 //      ____________________________________________________________
         serviceTimeEnd     <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
         _                  <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
@@ -282,6 +282,7 @@ object UploadController {
         )
         _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $waitingTime $operationId")
         _                  <- ctx.logger.debug("____________________________________________________")
+        _                  <- downloadSemaphore.release
       } yield response
     }
   }

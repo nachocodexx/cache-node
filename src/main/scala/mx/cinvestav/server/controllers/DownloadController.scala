@@ -37,7 +37,8 @@ object DownloadController {
   def controller(operationId:String)(authReq: AuthedRequest[IO,User], objectId:String)(implicit ctx:NodeContext): IO[Response[IO]] = for {
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
-      currentEvents    = Events.relativeInterpretEvents(currentState.events)
+//      currentEvents    = Events.relativeInterpretEvents(currentState.events)
+      currentEvents    = Events.relativeInterpretEventsMonotonic(currentState.events)
       currentNodeId    = ctx.config.nodeId
       req             = authReq.req
       userId          = authReq.context.id
@@ -45,7 +46,9 @@ object DownloadController {
       objectExt       = headers.get(CIString("Object-Extension")).map(_.head.value).getOrElse("")
       objectSize      = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
       getStartAtNanos <- IO.monotonic.map(_.toNanos)
-      maybeObject     <- Events.getObjectIds(events = currentEvents).find(_ == objectId).traverse(currentState.cache.lookup).map(_.flatten)
+      maybeObject     <- Events.getObjectIds(events = currentEvents).find(_ == objectId)
+        .traverse(currentState.cache.lookup)
+        .map(_.flatten)
       getEndAtNanos   <- IO.monotonic.map(_.toNanos)
       getStNanos      = getEndAtNanos - getStartAtNanos
       now             <- IO.realTime.map(_.toMillis)
@@ -227,7 +230,6 @@ object DownloadController {
         response0           <- controller(operationId)(authReq,objectId)
         headers0            = response0.headers
         objectSize         = headers0.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-        _                  <- downloadSemaphore.release
         serviceTimeEnd     <- IO.monotonic.map(_.toNanos).map(_ - ctx.initTime)
         _                  <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
 
@@ -260,6 +262,7 @@ object DownloadController {
           )
         )
         _ <- ctx.logger.debug("____________________________________________________")
+        _                  <- downloadSemaphore.release
       } yield response
     }
 

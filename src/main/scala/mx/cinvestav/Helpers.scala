@@ -252,7 +252,8 @@ object Helpers {
                   correlationId    = operationId,
                   userId           = producerId,
                   serviceTimeStart = serviceTimeStart,
-                  serviceTimeEnd   = putEndAtNanos
+                  serviceTimeEnd   = putEndAtNanos,
+                  replication      = true
                 )
               _                      <- Events.saveEvents(List(delEvent,_put))
               //                      EVICTED

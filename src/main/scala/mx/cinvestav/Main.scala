@@ -72,6 +72,7 @@ object Main extends IOApp{
           )
           state           <- IO.ref(_initState)
           //        __________________________________________________________________________
+
           (client,finalizer) <- BlazeClientBuilder[IO](global)
             .withRequestTimeout(config.requestTimeoutMs millis)
             .withConnectTimeout(config.connectTimeoutMs millis)
@@ -80,6 +81,7 @@ object Main extends IOApp{
             .withIdleTimeout(config.idleTimeout millis)
             .withBufferSize(config.bufferSize)
             .resource.allocated
+
           implicit0(ctx:NodeContext)  <- NodeContext(config,logger = unsafeLogger,state=state,errorLogger = unsafeErroLogger,client=client,initTime = startTimestamp).pure[IO]
            _ <- if(ctx.config.systemReplicatorStarted) for{
              _ <- IO.unit

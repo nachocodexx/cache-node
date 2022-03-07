@@ -284,7 +284,6 @@ case class DefaultConfigV5(
                             serviceReplicator: ServiceReplicator,
                             intervalMs:Long,
                             maxConnections:Int,
-                            bufferSize:Int,
                             responseHeaderTimeoutMs:Long,
                             systemReplicatorStarted:Boolean,
                             requestTimeoutMs:Long,

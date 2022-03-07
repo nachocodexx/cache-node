@@ -105,7 +105,6 @@ object ReplicateController {
             case None => NoContent()
           }
         serviceTimeEnd    <- IO.monotonic.map(_.toNanos)
-        _                 <- semaphore.release
         serviceTime    = serviceTimeEnd-serviceTimeStart
         newResponse    = response.putHeaders(
           Headers(
@@ -115,6 +114,7 @@ object ReplicateController {
             Header.Raw(CIString("Waiting-Time"),waitingTime.toString),
           )
         )
+        _                 <- semaphore.release
       } yield newResponse
     }
   }

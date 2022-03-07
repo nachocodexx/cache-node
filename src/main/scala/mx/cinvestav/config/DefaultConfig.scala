@@ -287,5 +287,11 @@ case class DefaultConfigV5(
                             bufferSize:Int,
                             responseHeaderTimeoutMs:Long,
                             systemReplicatorStarted:Boolean,
+                            requestTimeoutMs:Long,
+                            connectTimeoutMs:Long,
+                            maxWaitQueueLimit:Int,
+                            maxTotalConnections:Int,
+                            idleTimeout:Long,
+                            bufferSize:Int,
                         )
 

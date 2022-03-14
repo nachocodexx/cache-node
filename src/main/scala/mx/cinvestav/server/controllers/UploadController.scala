@@ -274,7 +274,6 @@ object UploadController {
               serviceTimeNanos = serviceTime,
               correlationId    = operationId,
               userId           = user.id,
-              waitingTime      =  waitingTime,
               serviceTimeEnd   = serviceTimeEnd ,
               serviceTimeStart = serviceTimeStart
             )

@@ -248,7 +248,6 @@ object Helpers {
                   objectSize       = objectSize,
                   timestamp        = putEndAt,
                   serviceTimeNanos = putServiceTimeNanos,
-                  waitingTime      = waitingTime,
                   correlationId    = operationId,
                   userId           = producerId,
                   serviceTimeStart = serviceTimeStart,
@@ -280,7 +279,6 @@ object Helpers {
               serviceTimeNanos = putServiceTimeNanos,
               correlationId    = operationId,
               userId           = producerId,
-              waitingTime      = waitingTime,
               serviceTimeStart = serviceTimeStart,
               serviceTimeEnd   = putEndAtNanos
 

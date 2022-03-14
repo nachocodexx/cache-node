@@ -81,7 +81,6 @@ object ReplicateController {
                         serviceTimeNanos   = serviceTimeD,
                         serviceTimeStart   = serviceTimeStartD,
                         serviceTimeEnd     = serviceTimeEndD,
-                        waitingTime        = waitingTimeD,
                         userId             = ctx.config.nodeId,
                         correlationId      = operationId,
                         monotonicTimestamp = 0L

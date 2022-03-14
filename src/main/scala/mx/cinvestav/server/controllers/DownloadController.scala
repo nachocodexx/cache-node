@@ -257,7 +257,6 @@ object DownloadController {
               correlationId    = operationId,
               serviceTimeEnd   = serviceTimeEnd,
               serviceTimeStart = serviceTimeStart,
-              waitingTime      = waitingTime
             )
           )
         )

@@ -23,7 +23,8 @@ object ReplicateController {
   def apply(semaphore: Semaphore[IO])(implicit ctx:NodeContext) = {
 
     HttpRoutes.of[IO]{
-      case req@POST -> Root / "replicate" / objectId => for {
+      case req@POST -> Root / "replicate" / objectId =>
+        val program = for {
         serviceTimeStart  <- IO.monotonic.map(_.toNanos)
         _                 <- semaphore.acquire
         waitingTime       <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
@@ -103,7 +104,7 @@ object ReplicateController {
                 .lastOrError
             } yield res
             case None => NoContent()
-          }
+        }
         serviceTimeEnd    <- IO.monotonic.map(_.toNanos)
         serviceTime    = serviceTimeEnd-serviceTimeStart
         newResponse    = response.putHeaders(
@@ -115,7 +116,11 @@ object ReplicateController {
           )
         )
         _                 <- semaphore.release
+        _                 <- ctx.logger.debug("____________________________________________________")
       } yield newResponse
+      program.handleErrorWith{ e=>
+          ctx.logger.error(e.getMessage) *> InternalServerError()
+      }
     }
   }
 

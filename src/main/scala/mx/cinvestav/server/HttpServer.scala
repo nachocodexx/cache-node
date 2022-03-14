@@ -77,6 +77,7 @@ class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
       .withHttpApp(httpApp = httpApp)
       .withMaxConnections(ctx.config.maxConnections)
       .withResponseHeaderTimeout(ctx.config.responseHeaderTimeoutMs milliseconds)
+      .withConnectorPoolSize(1000)
       .withBufferSize(ctx.config.bufferSize)
       .serve
       .compile

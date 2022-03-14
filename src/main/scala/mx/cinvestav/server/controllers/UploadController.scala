@@ -42,21 +42,18 @@ object UploadController {
 
 
   def controller(operationId:String, objectId:String)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext): IO[Response[IO]] = for {
-//      arrivalTime      <- IO.realTime.map(_.toMillis)
       arrivalTimeNanos <- IO.monotonic.map(_.toNanos)
       currentState     <- ctx.state.get
-//      currentEvents    = Events.relativeInterpretEvents(currentState.events)
       currentEvents    = Events.relativeInterpretEventsMonotonic(currentState.events)
       req              = authReq.req
       user             = authReq.context
       multipart        <- req.as[Multipart[IO]]
       parts            = multipart.parts
       //    _______________________________________________
-      responses    <- parts.traverse{ part =>
+      responses        <- parts.traverse{ part =>
         for{
           _               <- IO.unit
           partHeaders     = part.headers
-//          guid            = partHeaders.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
           contentType     = partHeaders.get(HEADERS.`Content-Type`.headerInstance.name).map(_.head.value).getOrElse("application/octet-stream")
           media           = MediaType.unsafeParse(contentType)
           objectExtension = media.fileExtensions.head
@@ -72,7 +69,6 @@ object UploadController {
               meta = Map("objectSize"->objectSize, "contentType" -> contentType, "extension" -> objectExtension)
               path = Paths.get(s"${ctx.config.storagePath}/$objectId")
               o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
-//              _    <- Stream.emits(bytesBuffer).covary[IO].through(Files[IO].writeAll(path)).compile.drain
               _    <- body.through(Files[IO].writeAll(path)).compile.drain
             } yield o
           }
@@ -229,7 +225,7 @@ object UploadController {
         val defaultConv = (x:FiniteDuration) => x.toNanos
         for {
         serviceTimeStart   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
-        _                  <- downloadSemaphore.acquire
+//        _                  <- downloadSemaphore.acquire
         waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
         //     ________________________________________________________________
         req                = authReq.req
@@ -281,7 +277,7 @@ object UploadController {
         )
         _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $waitingTime $operationId")
         _                  <- ctx.logger.debug("____________________________________________________")
-        _                  <- downloadSemaphore.release
+//        _                  <- downloadSemaphore.release
       } yield response
     }
   }

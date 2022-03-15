@@ -90,10 +90,11 @@ case class LoadBalancerInfo(
 case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:LoadBalancerInfo)
 
 case class Pool(hostname:String,port:Int) {
-  def httpURL = s"http://$hostname:$port"
-  def addNodeUri = s"http://$hostname:$port/api/v2/add-node"
-  def evictedUri = s"http://$hostname:$port/api/v2/evicted"
-  def putUri = s"$httpURL/api/v2/put"
+  def httpURL            = s"http://$hostname:$port"
+  def addNodeUri         = s"http://$hostname:$port/api/v2/add-node"
+  def uploadCompletedURI(operationId:String,objectId:String) = s"http://$hostname:$port/api/v2/upload/$operationId/$objectId"
+  def evictedUri         = s"http://$hostname:$port/api/v2/evicted"
+  def putUri             = s"$httpURL/api/v2/put"
   def monirotingUrl(nodeId:String) = s"$httpURL/api/v2/monitoring/$nodeId"
   def uploadUri = s"$httpURL/api/v2/upload"
   def downloadUri(objectId:String) = s"$httpURL/api/v2/download/$objectId"
@@ -108,6 +109,14 @@ case class Pool(hostname:String,port:Int) {
     _                  <- ctx.logger.debug(s"PUT_STATUS $status")
     //    _                  <- finalizer
   }  yield ()
+
+  def uploadCompleted(operationId:String,objectId:String)(implicit ctx:NodeContext) = {
+    val req = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId))
+    )
+    ctx.client.status(req = req)
+  }
 
   def upload(
               objectId:String,

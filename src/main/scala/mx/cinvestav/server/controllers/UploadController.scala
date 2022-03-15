@@ -226,7 +226,7 @@ object UploadController {
         for {
         serviceTimeStart   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
 //        _                  <- downloadSemaphore.acquire
-        waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
+//        waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
         //     ________________________________________________________________
         req                = authReq.req
         headers            = req.headers
@@ -248,11 +248,11 @@ object UploadController {
         _                  <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
 //      ____________________________________________________________
 //        waitingTime        = serviceTimeStart - arrivalTime
-        _                  <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
+//        _                  <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
         //      ______________________________________________________________________________________
         response           = response0.putHeaders(
           Headers(
-            Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
+//            Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
             Header.Raw(CIString("Service-Time"),serviceTime.toString),
             Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
             Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
@@ -275,8 +275,9 @@ object UploadController {
             )
           )
         )
-        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $waitingTime $operationId")
+        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $operationId")
         _                  <- ctx.logger.debug("____________________________________________________")
+        _                  <- ctx.config.pool.uploadCompleted(operationId, objectId).start
 //        _                  <- downloadSemaphore.release
       } yield response
     }

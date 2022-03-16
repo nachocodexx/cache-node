@@ -255,23 +255,27 @@ object DownloadController {
         )
         objectSize         = response.headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
         _                  <- ctx.logger.info(s"GET $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTimeNanos $waitingTime $operationId")
-        _ <-if(response.status.code == 404) IO.unit else Events.saveEvents(
-          events = List(
-            Get(
-              serialNumber     = 0,
-              nodeId           = ctx.config.nodeId,
-              objectId         = objectId,
-              objectSize       = objectSize,
-              timestamp        = now,
-              serviceTimeNanos = serviceTimeNanos,
-              correlationId    = operationId,
-              serviceTimeEnd   = serviceTimeEnd,
-              serviceTimeStart = serviceTimeStart,
+        _ <-if(response.status.code == 404) IO.unit else for{
+          _ <- Events.saveEvents(
+              events = List(
+                Get(
+                  serialNumber     = 0,
+                  nodeId           = ctx.config.nodeId,
+                  objectId         = objectId,
+                  objectSize       = objectSize,
+                  timestamp        = now,
+                  serviceTimeNanos = serviceTimeNanos,
+                  correlationId    = operationId,
+                  serviceTimeEnd   = serviceTimeEnd,
+                  serviceTimeStart = serviceTimeStart,
+                )
+              )
             )
-          )
-        )
+          _ <- ctx.config.pool.downloadCompleted(operationId  = operationId, objectId = objectId).flatTap(s=>ctx.logger.debug(s"DOWNLOAD_COMPLETED_STATUS $s") ).start
+        } yield ()
         _ <- ctx.logger.debug("____________________________________________________")
         _                  <- downloadSemaphore.release
+
       } yield response
     }
 

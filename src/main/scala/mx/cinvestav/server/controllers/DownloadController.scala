@@ -54,14 +54,24 @@ object DownloadController {
       now             <- IO.realTime.map(_.toMillis)
       res            <- maybeObject match {
         case Some(currentObject) => for {
-          bytes <- currentObject match {
-            case o@ObjectD(guid, path, metadata) => Files[IO].readAll(path,chunkSize=8192).compile.to(Array)
-            case o@ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+          _     <- IO.unit
+//          bytes <- currentObject match {
+//            case o@ObjectD(guid, path, metadata) => Files[IO].readAll(path,chunkSize=8192).compile.to(Array)
+//            case o@ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+//          }
+          (sBytes,objectSize) = currentObject match {
+            case o@ObjectD(guid, path, metadata)  =>
+              (Files[IO].readAll(path,chunkSize=8192),metadata.get("objectSize").flatMap(_.toLongOption).getOrElse(0L))
+            case o@ObjectS(guid, bytes, metadata) =>
+              (Stream.emits(bytes),metadata.get("objectSize").flatMap(_.toLongOption).getOrElse(0L))
           }
-          response <- Ok(fs2.Stream.emits(bytes).covary[IO],
+
+
+//          bodyStream = sBytes
+          response <- Ok(sBytes,
             Headers(
               Header.Raw(CIString("Object-Id"), objectId),
-              Header.Raw(CIString("Object-Size"),bytes.length.toString ),
+              Header.Raw(CIString("Object-Size"), objectSize.toString),
               Header.Raw(CIString("Level"),"LOCAL" ),
               Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
               Header.Raw(CIString("Operation-Id"),operationId),
@@ -222,16 +232,16 @@ object DownloadController {
       case authReq@GET -> Root / "download" / objectId as user => for {
         serviceTimeStart <- IO.monotonic.map(_.toNanos).map(_ - ctx.initTime)
         now              <- IO.realTime.map(_.toNanos)
-        _                  <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
-        _                  <- downloadSemaphore.acquire
-        operationId        = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        waitingTime        <- IO.monotonic.map(_.toNanos).map(_ - ctx.initTime).map(_ - serviceTimeStart)
-        _                  <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
-        response0           <- controller(operationId)(authReq,objectId)
-        headers0            = response0.headers
-        objectSize         = headers0.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-        serviceTimeEnd     <- IO.monotonic.map(_.toNanos).map(_ - ctx.initTime)
-        _                  <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
+        _                <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
+        _                <- downloadSemaphore.acquire
+        operationId      = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        waitingTime      <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
+        _                <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
+        response0        <- controller(operationId)(authReq,objectId)
+        headers0         = response0.headers
+//        objectSize       = headers0.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        serviceTimeEnd   <- IO.monotonic.map(_.toNanos)
+        _                <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
 
         serviceTimeNanos   = serviceTimeEnd - serviceTimeStart
         _                  <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTimeNanos")

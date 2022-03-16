@@ -87,7 +87,7 @@ object UploadController {
             } yield o
           }
           //        PUT TO CACHE
-          evictedElement  <- IO.delay{CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)}
+          evictedElement  = CacheX.put(events = currentEvents,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)
           now             <- IO.realTime.map(_.toMillis)
 
           newHeaders      <- evictedElement match {
@@ -174,24 +174,7 @@ object UploadController {
             //               NO EVICTION
             case None => for {
               //             PUT NEW OBJECT
-//              putStartAtNanos     <- IO.monotonic.map(_.toNanos)
               _                   <- currentState.cache.insert(objectId,newObject)
-//              putEndAtNanos       <- IO.monotonic.map(_.toNanos)
-//              putServiceTimeNanos = putEndAtNanos - putStartAtNanos
-//              _ <- Events.saveEvents(
-//                events =  List(
-//                  Put(
-//                    serialNumber     = 0,
-//                    nodeId           = ctx.config.nodeId,
-//                    objectId         = newObject.guid,
-//                    objectSize       = objectSize.toLong,
-//                    timestamp        = now,
-//                    serviceTimeNanos = putServiceTimeNanos,
-//                    correlationId    = operationId,
-//                    userId           = user.id
-//                  )
-//                )
-//              )
               newHeaders = Headers(
                 Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
                 Header.Raw(CIString("Level"), "LOCAL"),
@@ -223,7 +206,7 @@ object UploadController {
     AuthedRoutes.of[User,IO]{
       case authReq@POST -> Root / "upload" as user =>
         val defaultConv = (x:FiniteDuration) => x.toNanos
-        for {
+        val program = for {
         serviceTimeStart   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
 //        _                  <- downloadSemaphore.acquire
 //        waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
@@ -280,6 +263,10 @@ object UploadController {
         _                  <- ctx.config.pool.uploadCompleted(operationId, objectId).start
 //        _                  <- downloadSemaphore.release
       } yield response
+
+        program.onError{ e=>
+          ctx.logger.error(e.getMessage) *> ctx.logger.debug("____________________________________________________")
+        }
     }
   }
 

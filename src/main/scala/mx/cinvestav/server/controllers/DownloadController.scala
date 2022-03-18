@@ -230,31 +230,32 @@ object DownloadController {
   def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext) = {
     AuthedRoutes.of[User,IO]{
       case authReq@GET -> Root / "download" / objectId as user => for {
-        serviceTimeStart <- IO.monotonic.map(_.toNanos).map(_ - ctx.initTime)
-        now              <- IO.realTime.map(_.toNanos)
-        _                <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
-        _                <- downloadSemaphore.acquire
-        operationId      = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        waitingTime      <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
-        _                <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
-        response0        <- controller(operationId)(authReq,objectId)
-        headers0         = response0.headers
-//        objectSize       = headers0.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-        serviceTimeEnd   <- IO.monotonic.map(_.toNanos)
-        _                <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
-
-        serviceTimeNanos   = serviceTimeEnd - serviceTimeStart
-        _                  <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTimeNanos")
-        response           = response0.putHeaders(
+        serviceTimeStart     <- IO.monotonic.map(_.toNanos)
+        serviceTimeStartReal <- IO.realTime.map(_.toNanos)
+        _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
+        _                    <- downloadSemaphore.acquire
+        operationId          = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        waitingTime          <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
+        _                    <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
+        response0            <- controller(operationId)(authReq,objectId)
+        headers0             = response0.headers
+        requestStartAt       = headers0.get(CIString("Request-Start-At")).flatMap(_.head.value.toLongOption).getOrElse(serviceTimeStart)
+        latency              = serviceTimeStartReal - requestStartAt
+        serviceTimeEnd       <- IO.monotonic.map(_.toNanos)
+        _                    <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
+        serviceTimeNanos     = serviceTimeEnd - serviceTimeStart
+        _                    <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTimeNanos")
+        response             = response0.putHeaders(
                   Headers(
+                    Header.Raw( CIString("Latency"),latency.toString ),
                     Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
                     Header.Raw(CIString("Service-Time"),serviceTimeNanos.toString),
                     Header.Raw(CIString("Service-Time-Start"),serviceTimeStart.toString),
                     Header.Raw(CIString("Service-Time-End"),serviceTimeEnd.toString)
                   )
         )
-        objectSize         = response.headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-        _                  <- ctx.logger.info(s"GET $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTimeNanos $waitingTime $operationId")
+        objectSize           = response.headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        _                    <- ctx.logger.info(s"GET $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTimeNanos $waitingTime $operationId")
         _ <-if(response.status.code == 404) IO.unit else for{
           _ <- Events.saveEvents(
               events = List(
@@ -263,7 +264,7 @@ object DownloadController {
                   nodeId           = ctx.config.nodeId,
                   objectId         = objectId,
                   objectSize       = objectSize,
-                  timestamp        = now,
+                  timestamp        = serviceTimeStartReal,
                   serviceTimeNanos = serviceTimeNanos,
                   correlationId    = operationId,
                   serviceTimeEnd   = serviceTimeEnd,

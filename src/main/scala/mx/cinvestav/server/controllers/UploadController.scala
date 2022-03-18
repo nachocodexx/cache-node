@@ -208,18 +208,24 @@ object UploadController {
         val defaultConv = (x:FiniteDuration) => x.toNanos
         val program = for {
         serviceTimeStart   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
-//        _                  <- downloadSemaphore.acquire
-//        waitingTime        <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime).map(_ - serviceTimeStart)
+        serviceTimeStartReal <- IO.realTime.map(_.toNanos)
         //     ________________________________________________________________
-        req                = authReq.req
-        headers            = req.headers
-        operationId        = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        objectId           = headers.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-        arrivalTime        = headers.get(CIString("Arrival-Time")).map(_.head.value).flatMap(_.toLongOption).getOrElse(0L)
-        objectSize         = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-        _                  <- ctx.logger.debug(s"TRACE_ARRIVAL_TIME $objectId $arrivalTime")
-        _                  <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
-        _                  <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
+        req                  = authReq.req
+        headers              = req.headers
+        operationId          = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        objectId             = headers.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        objectSize           = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        fileExtension        = headers.get(CIString("File-Extension")).map(_.head.value).getOrElse("")
+        filePath             = headers.get(CIString("File-Path")).map(_.head.value).getOrElse(s"$objectId.$fileExtension")
+        compressionAlgorithm = headers.get(CIString("Compression-Algorithm")).map(_.head.value).getOrElse("")
+        requestStartAt       = headers.get(CIString("Request-Start-At")).map(_.head.value).flatMap(_.toLongOption).getOrElse(serviceTimeStart)
+        catalogId            = headers.get(CIString("Catalog-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        digest               = headers.get(CIString("Digest")).map(_.head.value).getOrElse("")
+        blockIndex           = headers.get(CIString("Block-Index")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
+        blockId              = s"${objectId}_${blockIndex}"
+        latency              = serviceTimeStartReal - requestStartAt
+        _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
+        _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
 //      ___________________________________________________________________________________________
         response0          <- controller(operationId,objectId)(authReq)
         headers0           = response0.headers
@@ -230,12 +236,10 @@ object UploadController {
         serviceTime        = serviceTimeEnd - serviceTimeStart
         _                  <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
 //      ____________________________________________________________
-//        waitingTime        = serviceTimeStart - arrivalTime
-//        _                  <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
         //      ______________________________________________________________________________________
         response           = response0.putHeaders(
           Headers(
-//            Header.Raw( CIString("Waiting-Time"),waitingTime.toString ),
+            Header.Raw( CIString("Latency"),latency.toString ),
             Header.Raw(CIString("Service-Time"),serviceTime.toString),
             Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
             Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
@@ -245,20 +249,27 @@ object UploadController {
         _                  <- Events.saveEvents(
           events =  List(
             Put(
-              serialNumber     = 0,
-              nodeId           = ctx.config.nodeId,
-              objectId         = objectId,
-              objectSize       = objectSize,
-              timestamp        = now,
-              serviceTimeNanos = serviceTime,
-              correlationId    = operationId,
-              userId           = user.id,
-              serviceTimeEnd   = serviceTimeEnd ,
-              serviceTimeStart = serviceTimeStart
+              serialNumber         = 0,
+              objectId             = objectId,
+              objectSize           = objectSize,
+              timestamp            = now,
+              nodeId               = ctx.config.nodeId,
+              serviceTimeNanos     = serviceTime,
+              userId               = user.id,
+              serviceTimeEnd       = serviceTimeEnd,
+              serviceTimeStart     = serviceTimeStart,
+              correlationId        = operationId,
+              monotonicTimestamp   = 0L,
+              blockId              = blockId,
+              catalogId            = catalogId,
+              realPath             = filePath,
+              digest               = digest,
+              compressionAlgorithm = compressionAlgorithm,
+              extension            = fileExtension
             )
           )
         )
-        _                  <- ctx.logger.info(s"PUT $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime $operationId")
+        _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
         _                  <- ctx.logger.debug("____________________________________________________")
         _                  <- ctx.config.pool.uploadCompleted(operationId, objectId).start
 //        _                  <- downloadSemaphore.release

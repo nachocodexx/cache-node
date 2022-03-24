@@ -90,14 +90,15 @@ case class LoadBalancerInfo(
 case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:LoadBalancerInfo)
 
 case class Pool(hostname:String,port:Int) {
-  def httpURL            = s"http://$hostname:$port"
-  def addNodeUri         = s"http://$hostname:$port/api/v2/add-node"
-  def uploadCompletedURI(operationId:String,objectId:String) = s"http://$hostname:$port/api/v2/upload/$operationId/$objectId"
-  def evictedUri         = s"http://$hostname:$port/api/v2/evicted"
-  def putUri             = s"$httpURL/api/v2/put"
-  def monirotingUrl(nodeId:String) = s"$httpURL/api/v2/monitoring/$nodeId"
-  def uploadUri = s"$httpURL/api/v2/upload"
-  def downloadUri(objectId:String) = s"$httpURL/api/v2/download/$objectId"
+  def httpURL                                                  = s"http://$hostname:$port"
+  def addNodeUri                                               = s"http://$hostname:$port/api/v2/add-node"
+  def uploadCompletedURI(operationId:String,objectId:String)   = s"http://$hostname:$port/api/v2/upload/$operationId/$objectId"
+  def downloadCompletedURI(operationId:String,objectId:String) = s"http://$hostname:$port/api/v2/download/$operationId/$objectId"
+  def evictedUri                                               = s"http://$hostname:$port/api/v2/evicted"
+  def putUri                                                   = s"$httpURL/api/v2/put"
+  def monirotingUrl(nodeId:String)                             = s"$httpURL/api/v2/monitoring/$nodeId"
+  def uploadUri                                                = s"$httpURL/api/v2/upload"
+  def downloadUri(objectId:String)                             = s"$httpURL/api/v2/download/$objectId"
 
   def sendPut(put:PutAndGet)(implicit ctx:NodeContext) = for {
     _                  <- IO.unit
@@ -114,6 +115,13 @@ case class Pool(hostname:String,port:Int) {
     val req = Request[IO](
       method = Method.POST,
       uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId))
+    )
+    ctx.client.status(req = req)
+  }
+  def downloadCompleted(operationId:String,objectId:String)(implicit ctx:NodeContext) = {
+    val req = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(downloadCompletedURI(operationId = operationId, objectId = objectId))
     )
     ctx.client.status(req = req)
   }

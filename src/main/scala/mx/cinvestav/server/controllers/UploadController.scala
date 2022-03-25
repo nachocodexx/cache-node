@@ -190,7 +190,6 @@ object UploadController {
         val program = for {
           serviceTimeStart     <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
           serviceTimeStartReal <- IO.realTime.map(_.toNanos)
-
           //     ________________________________________________________________
           req                  = authReq.req
           headers              = req.headers
@@ -253,11 +252,12 @@ object UploadController {
              _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
              _                  <- ctx.logger.debug("____________________________________________________")
              _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId).flatMap{ status=>
-               if(status.code== 204) for{
+
+               ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
                  timestamp <- IO.realTime.map(_.toNanos)
                  _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)
                } yield ()
-               else IO.unit
+               else IO.unit)
              }).start
          } yield response
         }

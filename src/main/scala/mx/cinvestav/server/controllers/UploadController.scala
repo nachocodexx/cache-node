@@ -42,145 +42,162 @@ object UploadController {
 
 
   def controller(operationId:String, objectId:String,objectSize:Long)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext) = for {
-    arrivalTimeNanos  <- IO.monotonic.map(_.toNanos)
-    currentState      <- ctx.state.get
-    events            = Events.relativeInterpretEventsMonotonic(currentState.events)
-    maybeCompletedPut = EventXOps.completedPutByOperationId(events = events, operationId = operationId)
-    responses         <- maybeCompletedPut match {
-      case Some(value) =>
-        Forbidden(s"$operationId was completed", Headers(Header.Raw(CIString("Error-Msg"),s"$operationId was completed")) )
-          .map(_.asLeft[Response[IO]])
-      case None => for {
-        _           <- IO.unit
-        req         = authReq.req
-        user        = authReq.context
-        multipart   <- req.as[Multipart[IO]]
-        parts       = multipart.parts
-        //    _______________________________________________
-        responses   <- parts.traverse{ part =>
-          for{
-            _               <- IO.unit
-            partHeaders     = part.headers
-            contentType     = partHeaders.get(HEADERS.`Content-Type`.headerInstance.name).map(_.head.value).getOrElse("application/octet-stream")
-            media           = MediaType.unsafeParse(contentType)
-            objectExtension = media.fileExtensions.head
-            body            = part.body
+    arrivalTimeNanos    <- IO.monotonic.map(_.toNanos)
+    currentState        <- ctx.state.get
+    events              = Events.relativeInterpretEventsMonotonic(currentState.events)
+    usedStorageCap      = EventXOps.calculateUsedStorageCapacity(events=events,nodeId = ctx.config.nodeId)
+    availableStorageCap = ctx.config.totalStorageCapacity - usedStorageCap
+    _                   <- ctx.logger.debug(s"USED_STORAGE_CAPACITY $usedStorageCap")
+    _                   <- ctx.logger.debug(s"AVAILABLE_STORAGE_CAPACITY $availableStorageCap")
+    responses           <- if(availableStorageCap >= objectSize) {
+      for {
+        _                 <- IO.unit
+        maybeCompletedPut = EventXOps.completedPutByOperationId(events = events, operationId = operationId)
+        responses         <- maybeCompletedPut match {
+          case Some(value) =>
+            Forbidden(s"$operationId was completed", Headers(Header.Raw(CIString("Error-Msg"),s"$operationId was completed")) )
+              .map(_.asLeft[Response[IO]])
+          case None => for {
+            _           <- IO.unit
+            req         = authReq.req
+            user        = authReq.context
+            multipart   <- req.as[Multipart[IO]]
+            parts       = multipart.parts
+            //    _______________________________________________
+            responses   <- parts.traverse{ part =>
+              for{
+                _               <- IO.unit
+                partHeaders     = part.headers
+                contentType     = partHeaders.get(HEADERS.`Content-Type`.headerInstance.name).map(_.head.value).getOrElse("application/octet-stream")
+                media           = MediaType.unsafeParse(contentType)
+                objectExtension = media.fileExtensions.head
+                body            = part.body
 
-            newObject <- if(!ctx.config.inMemory) {
-              for {
-                _    <- IO.unit
-                meta = Map("objectSize"->objectSize.toString, "contentType" -> contentType, "extension" -> objectExtension)
-                path = Paths.get(s"${ctx.config.storagePath}/$objectId")
-                o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
-                _    <- body.through(Files[IO].writeAll(path)).compile.drain
-              } yield o
-            }
-            else {
-              for {
-                bytesBuffer  <- body.compile.to(Array)
-                o = ObjectS(
-                  guid     = objectId,
-                  bytes    = bytesBuffer,
-                  metadata = Map(
-                    "objectSize"->objectSize.toString,
-                    "contentType" -> contentType,
-                    "extension" -> objectExtension
-                  )
-                ).asInstanceOf[IObject]
-              } yield o
-            }
-            //        PUT TO CACHE
-            evictedElement  = CacheX.put(events = events,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)
-            now             <- IO.realTime.map(_.toMillis)
+                newObject <- if(!ctx.config.inMemory) {
+                  for {
+                    _    <- IO.unit
+                    meta = Map("objectSize"->objectSize.toString, "contentType" -> contentType, "extension" -> objectExtension)
+                    path = Paths.get(s"${ctx.config.storagePath}/$objectId")
+                    o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
+                    _    <- body.through(Files[IO].writeAll(path)).compile.drain
+                  } yield o
+                }
+                else {
+                  for {
+                    bytesBuffer  <- body.compile.to(Array)
+                    o = ObjectS(
+                      guid     = objectId,
+                      bytes    = bytesBuffer,
+                      metadata = Map(
+                        "objectSize"->objectSize.toString,
+                        "contentType" -> contentType,
+                        "extension" -> objectExtension
+                      )
+                    ).asInstanceOf[IObject]
+                  } yield o
+                }
+                //        PUT TO CACHE
+                evictedElement  = CacheX.put(events = events,cacheSize = ctx.config.cacheSize,policy = ctx.config.cachePolicy)
+                now             <- IO.realTime.map(_.toMillis)
 
-            newHeaders      <- evictedElement match {
-              case Some(evictedObjectId) => for {
-                maybeEvictedObject <- currentState.cache.lookup(evictedObjectId)
-                newHeades             <- maybeEvictedObject match {
-                  case Some(evictedObject) => for {
-                    _                <- IO.unit
-                    evictedObjectBytes <- evictedObject match {
-                      case ObjectD(guid, path, metadata) => for {
-                        bytes  <- Files[IO].readAll(path,chunkSize = 8192).compile.to(Array)
-                      } yield bytes
-                      case ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+                newHeaders      <- evictedElement match {
+                  case Some(evictedObjectId) => for {
+                    maybeEvictedObject <- currentState.cache.lookup(evictedObjectId)
+                    newHeades             <- maybeEvictedObject match {
+                      case Some(evictedObject) => for {
+                        _                <- IO.unit
+                        evictedObjectBytes <- evictedObject match {
+                          case ObjectD(guid, path, metadata) => for {
+                            bytes  <- Files[IO].readAll(path,chunkSize = 8192).compile.to(Array)
+                          } yield bytes
+                          case ObjectS(guid, bytes, metadata) => bytes.pure[IO]
+                        }
+                        evictedObjectSize = evictedObjectBytes.length
+                        delete = evictedObject match {
+                          case _:ObjectD => true
+                          case _:ObjectS => false
+                        }
+                        _ <- Helpers.pushToNextLevel(
+                          evictedObjectId = evictedObjectId,
+                          bytes = evictedObjectBytes,
+                          metadata = evictedObject.metadata,
+                          currentEvents = events,
+                          correlationId = operationId,
+                          delete = delete
+                        ).start
+                        deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
+                        _                      <- currentState.cache.delete(evictedObjectId)
+                        deleteEndAt            <- IO.realTime.map(_.toMillis)
+                        deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
+                        deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
+                        _                      <- currentState.cache.insert(objectId,newObject)
+
+                        delEvent = Del(
+                          serialNumber = 0 ,
+                          nodeId = ctx.config.nodeId,
+                          objectId = evictedObjectId,
+                          objectSize = evictedObjectSize,
+                          timestamp =deleteEndAt,
+                          serviceTimeNanos = deleteServiceTimeNanos,
+                          correlationId = operationId
+                        )
+                        _ <- Events.saveEvents(List(delEvent))
+                        newHeaders = Headers(
+                          Header.Raw(CIString("Evicted-Object-Id"),evictedObjectId),
+                          Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
+                          Header.Raw(CIString("Node-Id"),ctx.config.nodeId ),
+                          Header.Raw(CIString("Level"),"CLOUD"  ),
+                          Header.Raw(CIString("Object-Size"),objectSize.toString)
+                        )
+                        //                      EVICTED
+                        _ <- ctx.config.pool.sendEvicted(delEvent).start
+                      } yield newHeaders
+                      case None => for {
+                        _ <- ctx.logger.error("WARNING: OBJECT WAS NOT PRESENT IN THE CACHE.")
+                      } yield Headers.empty
                     }
-                    evictedObjectSize = evictedObjectBytes.length
-                    delete = evictedObject match {
-                      case _:ObjectD => true
-                      case _:ObjectS => false
-                    }
-                    _ <- Helpers.pushToNextLevel(
-                      evictedObjectId = evictedObjectId,
-                      bytes = evictedObjectBytes,
-                      metadata = evictedObject.metadata,
-                      currentEvents = events,
-                      correlationId = operationId,
-                      delete = delete
-                    ).start
-                    deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
-                    _                      <- currentState.cache.delete(evictedObjectId)
-                    deleteEndAt            <- IO.realTime.map(_.toMillis)
-                    deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
-                    deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
-                    _                      <- currentState.cache.insert(objectId,newObject)
-
-                    delEvent = Del(
-                      serialNumber = 0 ,
-                      nodeId = ctx.config.nodeId,
-                      objectId = evictedObjectId,
-                      objectSize = evictedObjectSize,
-                      timestamp =deleteEndAt,
-                      serviceTimeNanos = deleteServiceTimeNanos,
-                      correlationId = operationId
-                    )
-                    _ <- Events.saveEvents(List(delEvent))
+                  } yield newHeades
+                  //               NO EVICTION
+                  case None => for {
+                    //             PUT NEW OBJECT
+                    _                   <- currentState.cache.insert(objectId,newObject)
                     newHeaders = Headers(
-                      Header.Raw(CIString("Evicted-Object-Id"),evictedObjectId),
-                      Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
-                      Header.Raw(CIString("Node-Id"),ctx.config.nodeId ),
-                      Header.Raw(CIString("Level"),"CLOUD"  ),
+                      Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+                      Header.Raw(CIString("Level"), "LOCAL"),
                       Header.Raw(CIString("Object-Size"),objectSize.toString)
                     )
-                    //                      EVICTED
-                    _ <- ctx.config.pool.sendEvicted(delEvent).start
+                    //                    Headers.empty
                   } yield newHeaders
-                  case None => for {
-                    _ <- ctx.logger.error("WARNING: OBJECT WAS NOT PRESENT IN THE CACHE.")
-                  } yield Headers.empty
                 }
-              } yield newHeades
-              //               NO EVICTION
-              case None => for {
-                //             PUT NEW OBJECT
-                _                   <- currentState.cache.insert(objectId,newObject)
-                newHeaders = Headers(
-                  Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
-                  Header.Raw(CIString("Level"), "LOCAL"),
-                  Header.Raw(CIString("Object-Size"),objectSize.toString)
-                )
-                //                    Headers.empty
-              } yield newHeaders
-            }
-            now                 <- IO.realTime.map(_.toMillis)
-            nowNanos            <- IO.monotonic.map(_.toNanos)
-            //              putServiceTime      = now - arrivalTime
-            putServiceTimeNanos = nowNanos - arrivalTimeNanos
-            responsePayload = PushResponse(
-              userId= user.id,
-              guid=objectId,
-              objectSize=  objectSize,
-              serviceTimeNanos = putServiceTimeNanos,
-              timestamp = now,
-              level  = ctx.config.level,
-              nodeId = ctx.config.nodeId
-            ).asJson
-            response <- Ok(responsePayload,newHeaders)
-          } yield response
-        }.map(_.head)
-//          .asRight[Response[IO]]
-      } yield responses.asRight[Response[IO]]
+                now                 <- IO.realTime.map(_.toMillis)
+                nowNanos            <- IO.monotonic.map(_.toNanos)
+                //              putServiceTime      = now - arrivalTime
+                putServiceTimeNanos = nowNanos - arrivalTimeNanos
+                responsePayload = PushResponse(
+                  userId= user.id,
+                  guid=objectId,
+                  objectSize=  objectSize,
+                  serviceTimeNanos = putServiceTimeNanos,
+                  timestamp = now,
+                  level  = ctx.config.level,
+                  nodeId = ctx.config.nodeId
+                ).asJson
+                response <- Ok(responsePayload,newHeaders)
+              } yield response
+            }.map(_.head)
+            //          .asRight[Response[IO]]
+          } yield responses.asRight[Response[IO]]
+        }
+      } yield responses
     }
+    else {
+      for {
+        _   <- ctx.logger.debug(s"NO_AVAILABLE_STORAGE_CAPACITY $objectId")
+        res <- Accepted().map(_.asLeft[Response[IO]])
+      } yield res
+    }
+
+
     } yield responses
   def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
 
@@ -213,14 +230,12 @@ object UploadController {
           case Left(value) =>  value.pure[IO]
           case Right(value) => for {
              _                <- IO.unit
-//             headers0         = value.headers
              //      ____________________________________________________________
              serviceTimeEnd   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
              _                <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
              //      ____________________________________________________________
              serviceTime      = serviceTimeEnd - serviceTimeStart
              _                <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
-             //      ____________________________________________________________
              //      ______________________________________________________________________________________
              response         = value.putHeaders(Headers(
                  Header.Raw(CIString("Latency"),latency.toString ),

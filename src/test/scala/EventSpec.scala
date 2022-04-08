@@ -66,49 +66,67 @@ class EventSpec  extends munit .CatsEffectSuite {
     )
 
     val rawEvents = List(
-      basePut,
-      baseGet.copy(
-          monotonicTimestamp = 23010974823201L
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L,
-        serialNumber = 3,
-        eventId = "event-3"
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L,
-        serialNumber = 4,
-        eventId = "event-4"
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L,
-        serialNumber = 4,
-        eventId = "event-4"
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L,
-        serialNumber = 5,
-        eventId = "event-6"
-      ),
-      baseGet.copy(
-        monotonicTimestamp = 23015933029880L,
-        serialNumber = 7,
-        eventId = "event-7"
-      ),
+      basePut.copy(monotonicTimestamp = 0,serviceTimeNanos = 10),
+      basePut.copy(monotonicTimestamp = 1,serviceTimeNanos = 5),
+      basePut.copy(monotonicTimestamp = 2,serviceTimeNanos = 10),
+      basePut.copy(monotonicTimestamp = 5,serviceTimeNanos = 5),
+      baseGet.copy(monotonicTimestamp = 115,serviceTimeNanos = 2),
+    ).sortBy(_.monotonicTimestamp)
 
 
+    val serviceTimes  = rawEvents.map(_.serviceTimeNanos)
+    val arrivalTimes  = rawEvents.map(_.monotonicTimestamp)
+    val queueTimes    = EventXOps.calculateQueueTimes(arrivalTimes, serviceTimes)
+//    println(queueTimes)
+//    val queueElements = scala.collection.mutable.Queue[QueueElement]()
+//    val arrivalXServiceTimes = arrivalTimes zip serviceTimes
+//
+//    arrivalXServiceTimes.zipWithIndex.foreach {
+//      case ((arrivalTime,serviceTime), index) =>
+//        val qi = QueueElement(
+//          arrivalTime   = arrivalTime,
+//          serviceTime   = serviceTime,
+//          departureTime = 0,
+//          waitingTime   = 0,
+//          idleTime      = 0
+//        )
+//        val previousDepartureTime = if(index ==0) index else queueElements.reverse.dequeue().departureTime
+//        val qj = if(arrivalTime > previousDepartureTime) {
+//           qi.copy(
+//            idleTime      = arrivalTime - previousDepartureTime,
+//            waitingTime   = 0,
+//            departureTime = arrivalTime + serviceTime
+//          )
+//        }
+//        else {
+//          val waitingTime = if(index ==0) 0 else previousDepartureTime - arrivalTime
+//          qi.copy(
+//            idleTime      = 0,
+//            waitingTime   = waitingTime,
+//            departureTime = previousDepartureTime + serviceTime + waitingTime
+//          )
+//        }
+//        queueElements.enqueue(qj)
+//    }
+//    println(queueElements.toString)
+//    queueElements.enqueue(QueueElement(0,0,0,0,0))
+//    queueElements.enqueue(QueueElement(1,0,0,0,0))
+//    println(queueElements.dequeue() )
+//    (0 until rawEvents.length).toList.map{ index =>
 
-    )
-    val events = Events.relativeInterpretEvents(rawEvents)
+//    }
+
+//    val xs =
+
+//    println(rawEvents.toString)
+//    val events    = Events.relativeInterpretEvents(rawEvents)
+//    val xs        =
 //    println(events)
-    val  x = Events.getDownloadsByInterval(period = 1 second)(events=events)
-    val  y = Helpers.generateNextNumberOfAccessByObjectId(events=events)(1 second)
+//    val  x = Events.getDownloadsByInterval(period = 1 second)(events=events)
+//    val  y = Helpers.generateNextNumberOfAccessByObjectId(events=events)(1 second)
 //        Events.getDownloadsByIntervalByObjectId("F0")(1 second)(events=events)
-      println(x)
-      println(y)
+//      println(x)
+//      println(y)
 //    val evictedElement0 = Events.LFU(events = events,cacheSize = 3)
 //    val evictedElement1 = Events.LRU(events = events,cacheSize = 3)
 //    val counter = Events.getHitCounterByNodeV2(events=events)

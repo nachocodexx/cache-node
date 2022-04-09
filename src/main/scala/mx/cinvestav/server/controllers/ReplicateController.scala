@@ -8,7 +8,9 @@ import mx.cinvestav.commons.events.Get
 import mx.cinvestav.commons.payloads.PutAndGet
 import mx.cinvestav.events.Events
 import org.http4s.HttpRoutes
+import org.http4s.multipart.{Multipart, Part}
 
+import java.nio.file.Paths
 import java.util.UUID
 //
 import mx.cinvestav.Declarations.{NodeContext, User}
@@ -23,25 +25,67 @@ object ReplicateController {
   def apply(semaphore: Semaphore[IO])(implicit ctx:NodeContext) = {
 
     HttpRoutes.of[IO]{
+      case req@POST -> Root / "replicate" / "push" / objectId =>
+
+        val program = for {
+          serviceTimeStart <- IO.monotonic.map(_.toNanos)
+          currentState     <- ctx.state.get
+          operationId      = UUID.randomUUID().toString
+          _                <- ctx.logger.debug(s"REPLICATE $objectId")
+          headers          = req.headers
+          replicaNodes     = headers.get(CIString("Nodes")).map(_.map(_.value).toList).getOrElse(List.empty[String])
+          objectSize       = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+          uris             =  replicaNodes.map(nodeId => Uri.unsafeFromString(s"http://$nodeId:6666/api/v2/upload/$objectId"))
+          storagePath      = ctx.config.storagePath
+          objectPath       = Paths.get(s"$storagePath/$objectId")
+          uploadFile       = objectPath.toFile
+          multipart        = Multipart[IO](
+            parts = Vector(
+              Part.fileData(
+                name="upload",
+                file=uploadFile,
+                headers = Headers(
+                  Header.Raw(CIString("Object-Id"),objectId),
+                  HEADERS.`Content-Type`(MediaType.text.plain),
+                  HEADERS.`Content-Length`(uploadFile.length)
+                )
+              )
+            )
+          )
+          reqs              = uris.map(
+            uri=>
+              Request[IO](
+              method = Method.POST,
+              uri    = uri,
+              headers = multipart.headers
+            ).withEntity(multipart)
+                .putHeaders(headers)
+          )
+          res                  <- Ok()
+        } yield res
+
+        program
       case req@POST -> Root / "replicate" / objectId =>
         val program = for {
-        serviceTimeStart  <- IO.monotonic.map(_.toNanos)
-        _                 <- semaphore.acquire
-        waitingTime       <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
-        currentState      <- ctx.state.get
-//        currentEvents     = currentState.events
-        operationId       = UUID.randomUUID().toString
-        _                 <- ctx.logger.debug(s"REPLICATE $objectId")
-        headers           = req.headers
-        maybeReplicaNodes = headers.get(CIString("Nodes")).map(_.map(_.value))
-        objectSize        = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        serviceTimeStart     <- IO.monotonic.map(_.toNanos)
+        _                    <- semaphore.acquire
+        waitingTime          <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
+        currentState         <- ctx.state.get
+        operationId          = UUID.randomUUID().toString
+        _                    <- ctx.logger.debug(s"REPLICATE $objectId")
+        headers              = req.headers
+        maybeReplicaNodes    = headers.get(CIString("Nodes")).map(_.map(_.value))
+        objectSize           = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
+        replicationTechnique = headers.get(CIString("Replication-Technique")).map(_.head.value)
+//      ________________________________________________________________________________________________________________
         response          <- maybeReplicaNodes match {
             case Some(replicaNodes) => for {
               _                   <- ctx.logger.debug(s"FROM $replicaNodes")
-//
-              selectedReplicaNode =  replicaNodes.head
-              uri                 =  Uri.unsafeFromString(s"http://$selectedReplicaNode:6666/api/v2/download/$objectId")
-              _headers            =  Headers(
+              rf                  = replicaNodes.length
+//            __________________________________________________________________________________________________________
+              selectedReplicaNode = replicaNodes.head
+              uri                 = Uri.unsafeFromString(s"http://$selectedReplicaNode:6666/api/v2/download/$objectId")
+              _headers            = Headers (
                 Header.Raw(CIString("Operation-Id"), operationId ) ,
                 Header.Raw(CIString("Object-Id"),objectId),
                 Header.Raw(CIString("User-Id"),UUID.randomUUID().toString),
@@ -50,7 +94,6 @@ object ReplicateController {
               )
               request             =  Request[IO](method = Method.GET,uri =uri,headers = _headers)
 //
-//              (bytes,producerId)               <- ctx.client.stream(req = request)
                 res             <- ctx.client.stream(req = request)
                 .evalMap {
                   res =>

@@ -92,7 +92,7 @@ case class LoadBalancerLevel(zero: LoadBalancerInfo, one:LoadBalancerInfo,cloud:
 case class Pool(hostname:String,port:Int) {
   def httpURL                                                  = s"http://$hostname:$port"
   def addNodeUri                                               = s"http://$hostname:$port/api/v2/add-node"
-  def uploadCompletedURI(operationId:String,objectId:String)   = s"http://$hostname:$port/api/v2/upload/$operationId/$objectId"
+  def uploadCompletedURI(operationId:String,objectId:String,blockIndex:Int)   = s"http://$hostname:$port/api/v2/upload/$operationId/$objectId/$blockIndex"
   def downloadCompletedURI(operationId:String,objectId:String) = s"http://$hostname:$port/api/v2/download/$operationId/$objectId"
   def evictedUri                                               = s"http://$hostname:$port/api/v2/evicted"
   def putUri                                                   = s"$httpURL/api/v2/put"
@@ -111,10 +111,10 @@ case class Pool(hostname:String,port:Int) {
     //    _                  <- finalizer
   }  yield ()
 
-  def uploadCompleted(operationId:String,objectId:String)(implicit ctx:NodeContext) = {
+  def uploadCompleted(operationId:String,objectId:String,blockIndex:Int)(implicit ctx:NodeContext) = {
     val req = Request[IO](
       method = Method.POST,
-      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId))
+      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId,blockIndex=blockIndex))
     )
     ctx.client.status(req = req)
   }

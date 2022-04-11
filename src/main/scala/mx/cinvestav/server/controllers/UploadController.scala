@@ -261,12 +261,13 @@ object UploadController {
                  realPath             = filePath,
                  digest               = digest,
                  compressionAlgorithm = compressionAlgorithm,
-                 extension            = fileExtension
+                 extension            = fileExtension,
                )
+//             blockIndex         = put.getBlockIndex()
              _                  <- Events.saveEvents(events =  put :: Nil)
              _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
              _                  <- ctx.logger.debug("____________________________________________________")
-             _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId).flatMap{ status=>
+             _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
 
                ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
                  timestamp <- IO.realTime.map(_.toNanos)

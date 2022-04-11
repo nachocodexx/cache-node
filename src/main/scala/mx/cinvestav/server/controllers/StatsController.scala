@@ -5,7 +5,7 @@ import cats.effect.IO
 import mx.cinvestav.Declarations.NodeContext
 import mx.cinvestav.commons.events.EventXOps
 import mx.cinvestav.events.Events
-import mx.cinvestav.Declarations.Implicits.{iObjectEncoder, objectSEncoderv2}
+import mx.cinvestav.Declarations.Implicits.{iObjectEncoder}
 import mx.cinvestav.Helpers
 //
 import org.http4s.HttpRoutes
@@ -36,17 +36,17 @@ object StatsController {
         availableCapacity = totalCapacity-usedCapacity
         maybeObject       = Events.getObjectIds(events = filteredEvents)
         os                <- maybeObject.traverse(o=>currentState.cache.lookup(o)).map(_.flatten)
+//      ______________________________________________________________________________________________________________________________________________
         puts              = EventXOps.onlyPuts(events = events)
-//        puts              = EventXOps.onlyPutCompleteds(events = events)
         putsATs           = puts.map(_.monotonicTimestamp)
-        _                 <- ctx.logger.debug(putsATs.toString)
         putsSTs           = puts.map(_.serviceTimeNanos)
         putsQueueTimes    = EventXOps.calculateQueueTimes(arrivalTimes = putsATs,serviceTimes = putsSTs)
+//      ______________________________________________________________________________________________________________________________________________
         gets              = EventXOps.onlyGets(events = events)
-//        gets              = EventXOps.onlyGetCompleteds(events = events)
         getsATs           = gets.map(_.monotonicTimestamp)
         getsSTs           = gets.map(_.serviceTimeNanos)
         getsQueueTimes    = EventXOps.calculateQueueTimes(arrivalTimes = getsATs,serviceTimes = getsSTs)
+//      ______________________________________________________________________________________________________________________________________________
         global            = (puts ++ gets)
         globalATs         = global.map(_.monotonicTimestamp)
         globalSTs         = global.map(_.serviceTimeNanos)

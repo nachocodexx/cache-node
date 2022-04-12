@@ -114,7 +114,10 @@ case class Pool(hostname:String,port:Int) {
   def uploadCompleted(operationId:String,objectId:String,blockIndex:Int)(implicit ctx:NodeContext) = {
     val req = Request[IO](
       method = Method.POST,
-      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId,blockIndex=blockIndex))
+      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId,blockIndex=blockIndex)),
+      headers = Headers(
+        Header.Raw(CIString("Node-Id"),ctx.config.nodeId)
+      )
     )
     ctx.client.status(req = req)
   }

@@ -55,8 +55,7 @@ object UploadController {
         maybeCompletedPut = EventXOps.completedPutByOperationId(events = events, operationId = operationId)
         responses         <- maybeCompletedPut match {
           case Some(value) =>
-            Forbidden(s"$operationId was completed", Headers(Header.Raw(CIString("Error-Msg"),s"$operationId was completed")) )
-              .map(_.asLeft[Response[IO]])
+            Forbidden(s"$operationId was completed", Headers(Header.Raw(CIString("Error-Msg"),s"$operationId was completed")) ).map(_.asLeft[Response[IO]])
           case None => for {
             _           <- IO.unit
             req         = authReq.req
@@ -221,6 +220,7 @@ object UploadController {
           digest               = headers.get(CIString("Digest")).map(_.head.value).getOrElse("")
           blockIndex           = headers.get(CIString("Block-Index")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
           blockId              = s"${objectId}_${blockIndex}"
+//          replicaOperationId   = ""
           latency              = serviceTimeStartReal - requestStartAt
           _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
           _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")

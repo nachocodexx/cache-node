@@ -263,7 +263,6 @@ object UploadController {
                  compressionAlgorithm = compressionAlgorithm,
                  extension            = fileExtension,
                )
-//             blockIndex         = put.getBlockIndex()
              _                  <- Events.saveEvents(events =  put :: Nil)
              _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
              _                  <- ctx.logger.debug("____________________________________________________")

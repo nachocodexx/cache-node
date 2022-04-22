@@ -9,6 +9,7 @@ import cats.effect.std.Semaphore
 import mx.cinvestav.Declarations.{IObject, ObjectD}
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.{EventXOps, ObjectHashing, PutCompleted}
+import mx.cinvestav.commons.types.ObjectMetadata
 import org.http4s.{AuthedRequest, Response}
 
 import java.nio.file.Paths
@@ -41,7 +42,7 @@ import language.postfixOps
 object UploadController {
 
 
-  def controller(operationId:String, objectId:String,objectSize:Long)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext) = for {
+  def controller(operationId:String, objectId:String,objectSize:Long,objectMetadata:ObjectMetadata)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext) = for {
     arrivalTimeNanos    <- IO.monotonic.map(_.toNanos)
     currentState        <- ctx.state.get
     events              = Events.relativeInterpretEventsMonotonic(currentState.events)
@@ -72,12 +73,24 @@ object UploadController {
                 objectExtension = media.fileExtensions.head
                 body            = part.body
 
+                metadata = Map(
+                  "objectId" -> objectId,
+                  "objectSize"->objectSize.toString,
+                  "extension" -> objectExtension,
+                  "filePath" -> objectMetadata.filePath,
+                  "compressionAlgorithm" -> objectMetadata.compressionAlgorithm,
+                  "catalogId" -> objectMetadata.catalogId,
+                  "digest" -> objectMetadata.digest,
+                  "blockIndex" -> objectMetadata.blockIndex.toString,
+                  "blockId" -> objectMetadata.blockId,
+                  "contentType" -> contentType,
+                  "blockTotal" -> objectMetadata.blockTotal.toString
+                )
                 newObject <- if(!ctx.config.inMemory) {
                   for {
                     _    <- IO.unit
-                    meta = Map("objectSize"->objectSize.toString, "contentType" -> contentType, "extension" -> objectExtension)
                     path = Paths.get(s"${ctx.config.storagePath}/$objectId")
-                    o    = ObjectD(guid=objectId,path =path,metadata=meta).asInstanceOf[IObject]
+                    o    = ObjectD(guid=objectId,path =path,metadata=metadata).asInstanceOf[IObject]
                     _    <- body.through(Files[IO].writeAll(path)).compile.drain
                   } yield o
                 }
@@ -87,11 +100,7 @@ object UploadController {
                     o = ObjectS(
                       guid     = objectId,
                       bytes    = bytesBuffer,
-                      metadata = Map(
-                        "objectSize"->objectSize.toString,
-                        "contentType" -> contentType,
-                        "extension" -> objectExtension
-                      )
+                      metadata  = metadata
                     ).asInstanceOf[IObject]
                   } yield o
                 }
@@ -219,16 +228,34 @@ object UploadController {
           catalogId            = headers.get(CIString("Catalog-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
           digest               = headers.get(CIString("Digest")).map(_.head.value).getOrElse("")
           blockIndex           = headers.get(CIString("Block-Index")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
+          blockTotal           = headers.get(CIString("Block-Total")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
+          arrivalTime          = headers.get(CIString("Arrival-Time")).map(_.head.value).flatMap(_.toLongOption).getOrElse(serviceTimeStart)
+          collaborative        = headers.get(CIString("Collaborative")).map(_.head.value).flatMap(_.toBooleanOption).getOrElse(false)
+          replicaNodes         = headers.get(CIString("Replica-Node")).map(_.map(_.value).toList).getOrElse(Nil)
+
           blockId              = s"${objectId}_${blockIndex}"
+          objectMetadata       = ObjectMetadata(
+            objectId,
+            objectSize,
+            fileExtension,
+            filePath,
+            compressionAlgorithm,
+            catalogId,
+            digest,
+            blockIndex,
+            blockId,
+            blockTotal
+          )
 //          replicaOperationId   = ""
           latency              = serviceTimeStartReal - requestStartAt
           _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
           _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
           //      ___________________________________________________________________________________________
-          maybeResponse        <- controller(operationId,objectId,objectSize)(authReq)
+          maybeResponse        <- controller(operationId,objectId,objectSize,objectMetadata)(authReq)
           response             <- maybeResponse match {
           case Left(value) =>  value.pure[IO]
-          case Right(value) => for {
+          case Right(value) =>
+            val x = for {
              _                <- IO.unit
              //      ____________________________________________________________
              serviceTimeEnd   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
@@ -237,12 +264,14 @@ object UploadController {
              serviceTime      = serviceTimeEnd - serviceTimeStart
              _                <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
              //      ______________________________________________________________________________________
-             response         = value.putHeaders(Headers(
+             response         = value.putHeaders(
+               Headers(
                  Header.Raw(CIString("Latency"),latency.toString ),
                  Header.Raw(CIString("Service-Time"),serviceTime.toString),
                  Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
                  Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
-               ))
+               )
+             )
              now                <- IO.realTime.map(defaultConv)
              put                = Put(
                  serialNumber         = 0,
@@ -262,12 +291,19 @@ object UploadController {
                  digest               = digest,
                  compressionAlgorithm = compressionAlgorithm,
                  extension            = fileExtension,
+                 arrivalTime          = arrivalTime
                )
              _                  <- Events.saveEvents(events =  put :: Nil)
              _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
              _                  <- ctx.logger.debug("____________________________________________________")
-             _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
+             _                  <- if(collaborative) {
+                    for {
+                      _ <- ctx.logger.debug("REPLICA_NODES "+replicaNodes.toString())
+                    } yield ()
+             }
+             else IO.unit
 
+             _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
                ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
                  timestamp <- IO.realTime.map(_.toNanos)
                  _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)
@@ -275,6 +311,8 @@ object UploadController {
                else IO.unit)
              }).start
          } yield response
+        x
+//            Ok()
         }
       } yield response
 

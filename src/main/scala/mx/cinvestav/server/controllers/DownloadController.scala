@@ -234,7 +234,9 @@ object DownloadController {
         serviceTimeStart     <- IO.monotonic.map(_.toNanos)
         serviceTimeStartReal <- IO.realTime.map(_.toNanos)
         _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
-        operationId          = authReq.req.headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        headers              = authReq.req.headers
+        operationId          = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
+        arrivalTime          = headers.get(CIString("Arrival-Time")).map(_.head.value).flatMap(_.toLongOption).getOrElse(serviceTimeStart)
         waitingTime          <- IO.monotonic.map(_.toNanos).map(_ - serviceTimeStart)
         _                    <- ctx.logger.debug(s"WAITING_TIME $objectId $waitingTime")
         response0            <- controller(operationId)(authReq,objectId)
@@ -268,6 +270,7 @@ object DownloadController {
               correlationId    = operationId,
               serviceTimeEnd   = serviceTimeEnd,
               serviceTimeStart = serviceTimeStart,
+              arrivalTime        = arrivalTime
             )
           _   <- Events.saveEvents(events = List(get))
           _   <- (

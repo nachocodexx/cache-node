@@ -235,16 +235,16 @@ object UploadController {
 
           blockId              = s"${objectId}_${blockIndex}"
           objectMetadata       = ObjectMetadata(
-            objectId,
-            objectSize,
-            fileExtension,
-            filePath,
-            compressionAlgorithm,
-            catalogId,
-            digest,
-            blockIndex,
-            blockId,
-            blockTotal
+            objectId             = objectId,
+            objectSize           = objectSize,
+            fileExtension        = fileExtension,
+            filePath             = filePath,
+            compressionAlgorithm = compressionAlgorithm,
+            catalogId            = catalogId ,
+            digest               = digest,
+            blockIndex           = blockIndex,
+            blockId              = blockId,
+            blockTotal           = blockTotal
           )
 //          replicaOperationId   = ""
           latency              = serviceTimeStartReal - requestStartAt

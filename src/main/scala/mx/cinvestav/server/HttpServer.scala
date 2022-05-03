@@ -48,8 +48,8 @@ import org.http4s.{headers=>HEADERS}
 class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
   def apiBaseRouteName = s"/api/v${ctx.config.apiVersion}"
 
-  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController() <+> InfoRoutes() <+> HitCounterController() <+>
-    ReplicateController(dSemaphore) <+> ActiveReplication()
+  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController() <+> InfoRoutes() <+> HitCounterController() <+> ActiveReplication()
+//    ReplicateController(dSemaphore) <+>
 
   private def httpApp: Kleisli[IO, Request[IO],
     Response[IO]] = Router[IO](

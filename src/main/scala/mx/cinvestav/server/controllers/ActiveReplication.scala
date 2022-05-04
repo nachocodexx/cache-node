@@ -26,8 +26,8 @@ object ActiveReplication {
       headers        = req.headers
       replicaNodes   = headers.get(CIString("Replica-Node")).map(_.map(_.value).toList).getOrElse(Nil)
       operationIds   = headers.get(CIString("Operation-Id")).map(_.map(_.value).toList).getOrElse(Nil)
-      _ <- ctx.logger.debug(s"REPLICA_NODES $replicaNodes")
-      _ <- ctx.logger.debug(s"OPERATION_IDS $operationIds")
+//      _ <- ctx.logger.debug(s"REPLICA_NODES $replicaNodes")
+//      _ <- ctx.logger.debug(s"OPERATION_IDS $operationIds")
       events         = Events.relativeInterpretEventsMonotonic(currentState.events)
       maybeObject    <- Events.getObjectIds(events = events).find(_ == objectId)
         .traverse(currentState.cache.lookup)
@@ -36,7 +36,7 @@ object ActiveReplication {
 
       res <- maybeObject match {
         case Some(currentObject) => for {
-          _                   <- ctx.logger.debug(s"REPLICATE_OBJECT ${currentObject.guid}")
+//          _                   <- ctx.logger.debug(s"REPLICATE_OBJECT ${currentObject.guid}")
           arrivalTime         <- IO.realTime.map(_.toNanos)
           (sBytes,objectSize) = currentObject match {
             case o@ObjectD(guid, path, metadata)  =>
@@ -94,6 +94,7 @@ object ActiveReplication {
           responses <- uploadRequests.traverse{request =>
             ctx.client.status(request)
           }
+          _ <- ctx.logger.debug(s"RESPONSES $responses")
           res <- NoContent()
         } yield res
         case None => NotFound()

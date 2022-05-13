@@ -312,5 +312,6 @@ case class DefaultConfigV5(
                             maxTotalConnections:Int,
                             idleTimeout:Long,
                             bufferSize:Int,
+                            delayReplicaMs:Long
                         )
 

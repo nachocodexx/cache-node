@@ -12,7 +12,11 @@ import org.http4s.dsl.io._
 import org.http4s.multipart.{Multipart, Part}
 import org.typelevel.ci.CIString
 import org.http4s.{headers=>HEADERS}
+import scala.concurrent.duration._
+import scala.language.postfixOps
 import java.util.UUID
+import retry._
+import retry.implicits._
 
 object ActiveReplication {
 
@@ -26,8 +30,6 @@ object ActiveReplication {
       headers        = req.headers
       replicaNodes   = headers.get(CIString("Replica-Node")).map(_.map(_.value).toList).getOrElse(Nil)
       operationIds   = headers.get(CIString("Operation-Id")).map(_.map(_.value).toList).getOrElse(Nil)
-//      _ <- ctx.logger.debug(s"REPLICA_NODES $replicaNodes")
-//      _ <- ctx.logger.debug(s"OPERATION_IDS $operationIds")
       events         = Events.relativeInterpretEventsMonotonic(currentState.events)
       maybeObject    <- Events.getObjectIds(events = events).find(_ == objectId)
         .traverse(currentState.cache.lookup)
@@ -59,8 +61,6 @@ object ActiveReplication {
                   Part(headers = oHeaders,body = sBytes)
                 )
               )
-//              val _operationId = s"${operationId}_${oMetadata.blockIndex}"
-
               val objectHeaders = Headers(
                 Header.Raw(CIString("Operation-Id"),operationId),
                 Header.Raw(CIString("User-Id"),"SYSTEM"),
@@ -91,10 +91,15 @@ object ActiveReplication {
                ).withEntity(multipart).putHeaders(objectHeaders)
             } yield request
           }
-          responses <- uploadRequests.traverse{request =>
-            ctx.client.status(request)
-          }
-          _ <- ctx.logger.debug(s"RESPONSES $responses")
+          responses <- Stream.emits(uploadRequests).covary[IO].evalMap{request =>
+            ctx.client.status(request).retryingOnFailures(
+              policy        = RetryPolicies.limitRetries[IO](10) join RetryPolicies.exponentialBackoff[IO](1 second),
+              wasSuccessful = status=>
+                status.isSuccess.pure[IO] <* ctx.logger.debug(s"REPLICATION $objectId $replicaNodes $status"),
+              onFailure     = (status,rd) => ctx.logger.debug(s"ON_FAILURE $status $rd")
+            )
+          }.compile.drain
+//          _ <- ctx.logger.debug(s"RESPONSES $responses")
           res <- NoContent()
         } yield res
         case None => NotFound()
@@ -174,9 +179,19 @@ object ActiveReplication {
                   ).withEntity(multipart).putHeaders(objectHeaders)
                 } yield request
             }
-            responses <- uploadRequests.traverse{request =>
-              ctx.client.status(request)
-            }
+
+            responses <- Stream.emits(uploadRequests).covary[IO].evalMap{request =>
+              ctx.client.status(request).retryingOnFailures(
+                policy        = RetryPolicies.limitRetries[IO](10) join RetryPolicies.exponentialBackoff[IO](1 second),
+                wasSuccessful = status=>
+                  status.isSuccess.pure[IO] <* ctx.logger.debug(s"REPLICATION $objectId $replicaNodes $status"),
+                onFailure     = (status,rd) => ctx.logger.debug(s"ON_FAILURE $status $rd")
+              )
+//              *> IO.sleep(ctx.config.delayReplicaMs milliseconds)
+            }.compile.drain
+//            responses <- uploadRequests.traverse{request =>
+//              ctx.client.status(request)
+//            }
             res <- NoContent()
           } yield res
           case None => NotFound()

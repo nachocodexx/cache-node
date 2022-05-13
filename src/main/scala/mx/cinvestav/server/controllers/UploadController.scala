@@ -303,7 +303,7 @@ object UploadController {
              }
              else IO.unit
 
-             _                  <- (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
+             _                  <- IO.sleep(ctx.config.delayReplicaMs milliseconds)  *> (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
                ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
                  timestamp <- IO.realTime.map(_.toNanos)
                  _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)

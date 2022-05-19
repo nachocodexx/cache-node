@@ -6,11 +6,11 @@ import fs2.io.file.Files
 import cats.effect.IO
 import cats.effect.kernel.Outcome
 import cats.effect.std.Semaphore
-import mx.cinvestav.Declarations.{IObject, ObjectD}
+import mx.cinvestav.Declarations.{IObject, ObjectD, UploadHeadersOps}
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.{EventXOps, ObjectHashing, PutCompleted}
-import mx.cinvestav.commons.types.ObjectMetadata
-import org.http4s.{AuthedRequest, Response}
+import mx.cinvestav.commons.types.{ObjectMetadata, ReplicationProcessV2, UploadHeaders}
+import org.http4s.{AuthedRequest, Method, Request, Response, Uri}
 
 import java.nio.file.Paths
 //
@@ -25,8 +25,9 @@ import mx.cinvestav.commons.security.SecureX
 import org.http4s.{headers=>HEADERS}
 import org.http4s.{AuthedRoutes, Header, Headers, MediaType}
 import org.http4s.dsl.io._
-import org.http4s.multipart.Multipart
+import org.http4s.multipart.{Multipart,Part}
 import org.http4s.circe.CirceEntityEncoder._
+import org.http4s.circe.CirceEntityDecoder._
 import org.typelevel.ci.CIString
 //
 import io.circe._
@@ -42,7 +43,7 @@ import language.postfixOps
 object UploadController {
 
 
-  def controller(operationId:String, objectId:String,objectSize:Long,objectMetadata:ObjectMetadata)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext) = for {
+  def controller(uphs:UploadHeaders)(authReq:AuthedRequest[IO,User])(implicit ctx:NodeContext) = for {
     arrivalTimeNanos    <- IO.monotonic.map(_.toNanos)
     currentState        <- ctx.state.get
     events              = Events.relativeInterpretEventsMonotonic(currentState.events)
@@ -50,13 +51,13 @@ object UploadController {
     availableStorageCap = ctx.config.totalStorageCapacity - usedStorageCap
     _                   <- ctx.logger.debug(s"USED_STORAGE_CAPACITY $usedStorageCap")
     _                   <- ctx.logger.debug(s"AVAILABLE_STORAGE_CAPACITY $availableStorageCap")
-    responses           <- if(availableStorageCap >= objectSize) {
+    responses           <- if(availableStorageCap >= uphs.objectSize) {
       for {
         _                 <- IO.unit
-        maybeCompletedPut = EventXOps.completedPutByOperationId(events = events, operationId = operationId)
+        maybeCompletedPut = EventXOps.completedPutByOperationId(events = events, operationId = uphs.operationId)
         responses         <- maybeCompletedPut match {
           case Some(value) =>
-            Forbidden(s"$operationId was completed", Headers(Header.Raw(CIString("Error-Msg"),s"$operationId was completed")) ).map(_.asLeft[Response[IO]])
+            Forbidden(s"${uphs.operationId} was completed", Headers(Header.Raw(CIString("Error-Msg"),s"${uphs.operationId} was completed")) ).map(_.asLeft[Response[IO]])
           case None => for {
             _           <- IO.unit
             req         = authReq.req
@@ -74,23 +75,23 @@ object UploadController {
                 body            = part.body
 
                 metadata = Map(
-                  "objectId" -> objectId,
-                  "objectSize"->objectSize.toString,
+                  "objectId" -> uphs.objectId,
+                  "objectSize"-> uphs.objectSize.toString,
                   "extension" -> objectExtension,
-                  "filePath" -> objectMetadata.filePath,
-                  "compressionAlgorithm" -> objectMetadata.compressionAlgorithm,
-                  "catalogId" -> objectMetadata.catalogId,
-                  "digest" -> objectMetadata.digest,
-                  "blockIndex" -> objectMetadata.blockIndex.toString,
-                  "blockId" -> objectMetadata.blockId,
+                  "filePath" -> uphs.filePath,
+                  "compressionAlgorithm" -> uphs.compressionAlgorithm,
+                  "catalogId" -> uphs.catalogId,
+                  "digest" -> uphs.digest,
+                  "blockIndex" -> uphs.blockIndex.toString,
+                  "blockId" -> uphs.blockId,
                   "contentType" -> contentType,
-                  "blockTotal" -> objectMetadata.blockTotal.toString
+                  "blockTotal" -> uphs.blockTotal.toString
                 )
                 newObject <- if(!ctx.config.inMemory) {
                   for {
                     _    <- IO.unit
-                    path = Paths.get(s"${ctx.config.storagePath}/$objectId")
-                    o    = ObjectD(guid=objectId,path =path,metadata=metadata).asInstanceOf[IObject]
+                    path = Paths.get(s"${ctx.config.storagePath}/${uphs.objectId}")
+                    o    = ObjectD(guid=uphs.objectId,path =path,metadata=metadata).asInstanceOf[IObject]
                     _    <- body.through(Files[IO].writeAll(path)).compile.drain
                   } yield o
                 }
@@ -98,7 +99,7 @@ object UploadController {
                   for {
                     bytesBuffer  <- body.compile.to(Array)
                     o = ObjectS(
-                      guid     = objectId,
+                      guid     = uphs.objectId,
                       bytes    = bytesBuffer,
                       metadata  = metadata
                     ).asInstanceOf[IObject]
@@ -130,7 +131,7 @@ object UploadController {
                           bytes = evictedObjectBytes,
                           metadata = evictedObject.metadata,
                           currentEvents = events,
-                          correlationId = operationId,
+                          correlationId = uphs.operationId,
                           delete = delete
                         ).start
                         deleteStartAtNanos     <- IO.monotonic.map(_.toNanos)
@@ -138,7 +139,7 @@ object UploadController {
                         deleteEndAt            <- IO.realTime.map(_.toMillis)
                         deleteEndAtNanos       <- IO.monotonic.map(_.toNanos)
                         deleteServiceTimeNanos = deleteEndAtNanos - deleteStartAtNanos
-                        _                      <- currentState.cache.insert(objectId,newObject)
+                        _                      <- currentState.cache.insert(uphs.objectId,newObject)
 
                         delEvent = Del(
                           serialNumber = 0 ,
@@ -147,7 +148,7 @@ object UploadController {
                           objectSize = evictedObjectSize,
                           timestamp =deleteEndAt,
                           serviceTimeNanos = deleteServiceTimeNanos,
-                          correlationId = operationId
+                          correlationId = uphs.operationId
                         )
                         _ <- Events.saveEvents(List(delEvent))
                         newHeaders = Headers(
@@ -155,7 +156,7 @@ object UploadController {
                           Header.Raw(CIString("Evicted-Object-Size"),evictedObjectSize.toString),
                           Header.Raw(CIString("Node-Id"),ctx.config.nodeId ),
                           Header.Raw(CIString("Level"),"CLOUD"  ),
-                          Header.Raw(CIString("Object-Size"),objectSize.toString)
+                          Header.Raw(CIString("Object-Size"),uphs.objectSize.toString)
                         )
                         //                      EVICTED
                         _ <- ctx.config.pool.sendEvicted(delEvent).start
@@ -168,11 +169,11 @@ object UploadController {
                   //               NO EVICTION
                   case None => for {
                     //             PUT NEW OBJECT
-                    _                   <- currentState.cache.insert(objectId,newObject)
+                    _                   <- currentState.cache.insert(uphs.objectId,newObject)
                     newHeaders = Headers(
                       Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
                       Header.Raw(CIString("Level"), "LOCAL"),
-                      Header.Raw(CIString("Object-Size"),objectSize.toString)
+                      Header.Raw(CIString("Object-Size"),uphs.objectSize.toString)
                     )
                     //                    Headers.empty
                   } yield newHeaders
@@ -183,8 +184,8 @@ object UploadController {
                 putServiceTimeNanos = nowNanos - arrivalTimeNanos
                 responsePayload = PushResponse(
                   userId= user.id,
-                  guid=objectId,
-                  objectSize=  objectSize,
+                  guid=uphs.objectId,
+                  objectSize=  uphs.objectSize,
                   serviceTimeNanos = putServiceTimeNanos,
                   timestamp = now,
                   level  = ctx.config.level,
@@ -200,7 +201,7 @@ object UploadController {
     }
     else {
       for {
-        _   <- ctx.logger.debug(s"NO_AVAILABLE_STORAGE_CAPACITY $objectId")
+        _   <- ctx.logger.debug(s"NO_AVAILABLE_STORAGE_CAPACITY ${uphs.objectId}")
         res <- Accepted().map(_.asLeft[Response[IO]])
       } yield res
     }
@@ -210,110 +211,131 @@ object UploadController {
   def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
 
     AuthedRoutes.of[User,IO]{
+      case authReq@POST -> Root / "data" as user => for {
+        _       <- IO.unit
+        req     = authReq.req
+        multipart   <- req.as[Multipart[IO]]
+        _       <- multipart.parts.traverse{ part =>
+          val name    = part.name.getOrElse(s"${UUID.randomUUID().toString}")
+          val body    = part.body
+          val headers = part.headers
+          val path    = Paths.get(s"${ctx.config.storagePath}/$name")
+          body.through(Files[IO].writeAll(path = path)).compile.drain
+        }
+        res     <- NoContent()
+      } yield res
       case authReq@POST -> Root / "upload" as user =>
         val defaultConv = (x:FiniteDuration) => x.toNanos
         val program = for {
           serviceTimeStart     <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
           serviceTimeStartReal <- IO.realTime.map(_.toNanos)
+
           //     ________________________________________________________________
-          req                  = authReq.req
-          headers              = req.headers
-          operationId          = headers.get(CIString("Operation-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-          objectId             = headers.get(CIString("Object-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-          objectSize           = headers.get(CIString("Object-Size")).flatMap(_.head.value.toLongOption).getOrElse(0L)
-          fileExtension        = headers.get(CIString("File-Extension")).map(_.head.value).getOrElse("")
-          filePath             = headers.get(CIString("File-Path")).map(_.head.value).getOrElse(s"$objectId.$fileExtension")
-          compressionAlgorithm = headers.get(CIString("Compression-Algorithm")).map(_.head.value).getOrElse("")
-          requestStartAt       = headers.get(CIString("Request-Start-At")).map(_.head.value).flatMap(_.toLongOption).getOrElse(serviceTimeStart)
-          catalogId            = headers.get(CIString("Catalog-Id")).map(_.head.value).getOrElse(UUID.randomUUID().toString)
-          digest               = headers.get(CIString("Digest")).map(_.head.value).getOrElse("")
-          blockIndex           = headers.get(CIString("Block-Index")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
-          blockTotal           = headers.get(CIString("Block-Total")).map(_.head.value).flatMap(_.toIntOption).getOrElse(0)
-          arrivalTime          = headers.get(CIString("Arrival-Time")).map(_.head.value).flatMap(_.toLongOption).getOrElse(serviceTimeStart)
-          collaborative        = headers.get(CIString("Collaborative")).map(_.head.value).flatMap(_.toBooleanOption).getOrElse(false)
-          replicaNodes         = headers.get(CIString("Replica-Node")).map(_.map(_.value).toList).getOrElse(Nil)
+          req                     = authReq.req
+          payload                 <- req.as[Map[String,ReplicationProcessV2]].onError(e=> ctx.logger.error(e.getMessage))
+          maybeReplicationProcess = payload.get(ctx.config.nodeId)
+          response                <- maybeReplicationProcess match {
+            case Some(value) =>  for {
+              _ <- IO.unit
+              _ <- value.what.traverse{ f =>
+                val downloadReq = Request[IO](
+                  method = Method.GET,
+                  uri = Uri.unsafeFromString(f.url)
+                )
+                val response = ctx.client.stream(downloadReq).flatMap{
+                  res=>
+                    val path = Paths.get(s"${ctx.config.storagePath}/${f.id}")
+                    val s = res.body.through(Files[IO].writeAll(path = path))
+                    s
+                }
+                response.compile.drain *> ctx.logger.debug(s"${f.id} written successfully")
+              }
+              replicaNodes = value.where
 
-          blockId              = s"${objectId}_${blockIndex}"
-          objectMetadata       = ObjectMetadata(
-            objectId             = objectId,
-            objectSize           = objectSize,
-            fileExtension        = fileExtension,
-            filePath             = filePath,
-            compressionAlgorithm = compressionAlgorithm,
-            catalogId            = catalogId ,
-            digest               = digest,
-            blockIndex           = blockIndex,
-            blockId              = blockId,
-            blockTotal           = blockTotal
-          )
-//          replicaOperationId   = ""
-          latency              = serviceTimeStartReal - requestStartAt
-          _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME $objectId, $serviceTimeStart")
-          _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")
-          //      ___________________________________________________________________________________________
-          maybeResponse        <- controller(operationId,objectId,objectSize,objectMetadata)(authReq)
-          response             <- maybeResponse match {
-          case Left(value) =>  value.pure[IO]
-          case Right(value) =>
-            val x = for {
-             _                <- IO.unit
-             //      ____________________________________________________________
-             serviceTimeEnd   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
-             _                <- ctx.logger.debug(s"SERVICE_TIME_END $objectId $serviceTimeEnd")
-             //      ____________________________________________________________
-             serviceTime      = serviceTimeEnd - serviceTimeStart
-             _                <- ctx.logger.debug(s"SERVICE_TIME $objectId $serviceTime")
-             //      ______________________________________________________________________________________
-             response         = value.putHeaders(
-               Headers(
-                 Header.Raw(CIString("Latency"),latency.toString ),
-                 Header.Raw(CIString("Service-Time"),serviceTime.toString),
-                 Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
-                 Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
-               )
-             )
-             now                <- IO.realTime.map(defaultConv)
-             put                = Put(
-                 serialNumber         = 0,
-                 objectId             = objectId,
-                 objectSize           = objectSize,
-                 timestamp            = now,
-                 nodeId               = ctx.config.nodeId,
-                 serviceTimeNanos     = serviceTime,
-                 userId               = user.id,
-                 serviceTimeEnd       = serviceTimeEnd,
-                 serviceTimeStart     = serviceTimeStart,
-                 correlationId        = operationId,
-                 monotonicTimestamp   = 0L,
-                 blockId              = blockId,
-                 catalogId            = catalogId,
-                 realPath             = filePath,
-                 digest               = digest,
-                 compressionAlgorithm = compressionAlgorithm,
-                 extension            = fileExtension,
-                 arrivalTime          = arrivalTime
-               )
-             _                  <- Events.saveEvents(events =  put :: Nil)
-             _                  <- ctx.logger.info(s"PUT $operationId $objectId $objectSize $serviceTimeStart $serviceTimeEnd $serviceTime")
-             _                  <- ctx.logger.debug("____________________________________________________")
-             _                  <- if(collaborative) {
-                    for {
-                      _ <- ctx.logger.debug("REPLICA_NODES "+replicaNodes.toString())
-                    } yield ()
-             }
-             else IO.unit
+              _  <- ctx.state.update{
+                s=>
+                  val newMetadata = value.what.map{w=>
+                    val path = Paths.get(s"${ctx.config.storagePath}/${w.id}")
+                    w.id ->  ObjectD(w.id,path =path,metadata = w.metadata )
+                  }
+                s.copy(metadata = s.metadata ++ newMetadata )
+              }
 
-             _                  <- IO.sleep(ctx.config.delayReplicaMs milliseconds)  *> (ctx.config.pool.uploadCompleted(operationId, objectId,blockIndex).flatMap{ status=>
-               ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
-                 timestamp <- IO.realTime.map(_.toNanos)
-                 _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)
-               } yield ()
-               else IO.unit)
-             }).start
-         } yield response
-        x
-//            Ok()
-        }
+              res <- value.how.technique match {
+                case "ACTIVE" =>
+                  val uploadRequest = replicaNodes.map { id =>
+                    val r0 = Request[IO](method = Method.POST, uri = Uri.unsafeFromString(s"http://$id:6666/api/v2/upload"))
+                      .withEntity(payload)
+                    val parts = value.what.map{ w =>
+                      val file = Paths.get(s"${ctx.config.storagePath}/${w.id}").toFile
+                      Part.fileData[IO](name = w.id,file = file,headers = Headers.empty )
+                    }.toVector
+                    val multipart = Multipart[IO](parts = parts)
+                    val r1 = Request[IO](
+                      method  = Method.POST,
+                      uri     = Uri.unsafeFromString(s"http://$id:6666/api/v2/data"),
+                      headers = req.headers
+                    )
+                      .withEntity(multipart)
+                      .withHeaders(multipart.headers)
+                    (r0,r1)
+                  }
+                  uploadRequest.traverse{
+                    case (upReq,dataReq)  =>
+                      ctx.client.status(upReq).flatMap(s=> ctx.logger.debug(s"UPLOAD_STATUS $s"))*> ctx.client.status(dataReq).flatMap(s=> ctx.logger.debug(s"DATA_STATUS $s"))
+                  } *> Ok()
+                case "PASSIVE" => Ok()
+              }
+            } yield res
+            case None => NoContent()
+          }
+
+//          _                    <- ctx.logger.debug(payload.toString())
+//          headers              = req.headers
+//          uphs                 <- UploadHeadersOps.fromHeaders(headers=headers)
+//          replicaNodes         = uphs.replicaNodes
+//          _                    <- (IO.sleep(ctx.config.delayReplicaMs milliseconds) *> ctx.config.pool.uploadCompleted(uphs)).start
+
+//          latency              = serviceTimeStartReal - uphs.requestStartAt
+//          _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME ${uphs.objectId}, $serviceTimeStart")
+//          _                    <- ctx.logger.debug(s"SERVICE_TIME_START ${uphs.objectId} $serviceTimeStart")
+//          //      ___________________________________________________________________________________________
+//          maybeResponse        <- controller(uphs)(authReq)
+//          response             <- maybeResponse match {
+//          case Left(value) =>  value.pure[IO]
+//          case Right(value) =>
+//            val x = for {
+//             _                <- IO.unit
+//             //      ____________________________________________________________
+//             serviceTimeEnd   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
+//             _                <- ctx.logger.debug(s"SERVICE_TIME_END ${uphs.objectId} $serviceTimeEnd")
+//             //      ____________________________________________________________
+//             serviceTime      = serviceTimeEnd - serviceTimeStart
+//             _                <- ctx.logger.debug(s"SERVICE_TIME ${uphs.objectId} $serviceTime")
+//             //      ______________________________________________________________________________________
+//             response         = value.putHeaders(
+//               Headers(
+//                 Header.Raw(CIString("Latency"),latency.toString ),
+//                 Header.Raw(CIString("Service-Time"),serviceTime.toString),
+//                 Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
+//                 Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
+//               )
+//             )
+//             now                <- IO.realTime.map(defaultConv)
+//             put                = Put.fromUploadHeaders(nodeId = ctx.config.nodeId,userId = user.id,timestamp = now,serviceTimeStart, serviceTimeEnd, uphs)
+//             _                  <- Events.saveEvents(events =  put :: Nil)
+//             _                  <- ctx.logger.info(s"PUT ${uphs.operationId} ${uphs.objectId} ${uphs.objectSize} $serviceTimeStart $serviceTimeEnd $serviceTime")
+//             _                  <- ctx.logger.debug("____________________________________________________")
+//             _                  <- IO.sleep(ctx.config.delayReplicaMs milliseconds)  *> (ctx.config.pool.uploadCompleted(uphs).flatMap{ status=>
+//               ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
+//                 timestamp <- IO.realTime.map(_.toNanos)
+//                 _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)
+//               } yield ()
+//               else IO.unit)
+//             }).start
+//         } yield response
+//            x
+//        }
       } yield response
 
         program.onError{ e=>

@@ -9,7 +9,7 @@ import cats.effect.std.Semaphore
 import mx.cinvestav.Declarations.{IObject, ObjectD, UploadHeadersOps}
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.{EventXOps, ObjectHashing, PutCompleted}
-import mx.cinvestav.commons.types.{ObjectMetadata, ReplicationProcessV2, UploadHeaders}
+import mx.cinvestav.commons.types.{ObjectMetadata, ReplicationProcess, ReplicationProcessV2, UploadHeaders}
 import org.http4s.{AuthedRequest, Method, Request, Response, Uri}
 
 import java.nio.file.Paths
@@ -234,7 +234,7 @@ object UploadController {
           req                     = authReq.req
           headers                 = req.headers
           uphs                    <- UploadHeadersOps.fromHeaders(headers=headers)
-          payload                 <- req.as[Map[String,ReplicationProcessV2]].onError(e=> ctx.logger.error(e.getMessage))
+          payload                 <- req.as[Map[String,ReplicationProcess]].onError(e=> ctx.logger.error(e.getMessage))
 //          _ <- ctx.logger.debug(s"${payload}")
           maybeReplicationProcess = payload.get(ctx.config.nodeId)
           response                <- maybeReplicationProcess match {

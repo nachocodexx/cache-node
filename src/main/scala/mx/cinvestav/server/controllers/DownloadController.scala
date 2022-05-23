@@ -231,6 +231,15 @@ object DownloadController {
   def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext) = {
     AuthedRoutes.of[User,IO]{
       case authReq@GET -> Root / "download" / objectId as user => for {
+        _      <- IO.unit
+        path   = Paths.get(s"${ctx.config.storagePath}/$objectId")
+        stream = Files[IO].readAll(path = path,chunkSize = 8192)
+        headers = Headers(
+          Header.Raw(CIString(""),"")
+        )
+        res    <- Ok(stream)
+      } yield res
+      case authReq@GET -> Root / "downloadv2" / objectId as user => for {
         serviceTimeStart     <- IO.monotonic.map(_.toNanos)
         serviceTimeStartReal <- IO.realTime.map(_.toNanos)
         _                    <- ctx.logger.debug(s"SERVICE_TIME_START $objectId $serviceTimeStart")

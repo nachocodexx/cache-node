@@ -117,12 +117,9 @@ object ActiveReplication {
         replicaNodes   = headers.get(CIString("Replica-Node")).map(_.map(_.value).toList).getOrElse(Nil)
         operationIds   = headers.get(CIString("Operation-Id")).map(_.map(_.value).toList).getOrElse(Nil)
         events         = Events.relativeInterpretEventsMonotonic(currentState.events)
-        maybeObject    <- Events.getObjectIds(events = events).find(_ == objectId)
-          .traverse(currentState.cache.lookup)
-          .map(_.flatten)
-        _ <- ctx.logger.debug(maybeObject.toString)
-
-        res <- maybeObject match {
+        maybeObject    <- Events.getObjectIds(events = events).find(_ == objectId).traverse(currentState.cache.lookup).map(_.flatten)
+        _              <- ctx.logger.debug(maybeObject.toString)
+        res            <- maybeObject match {
           case Some(currentObject) => for {
             _                   <- ctx.logger.debug(s"REPLICATE_OBJECT ${currentObject.guid}")
             arrivalTime         <- IO.realTime.map(_.toNanos)
@@ -147,7 +144,6 @@ object ActiveReplication {
                     Part(headers = oHeaders,body = sBytes)
                   )
                 )
-//                val _operationId = s"${operationId}_${oMetadata.blockIndex}"
 
                 val objectHeaders = Headers(
                   Header.Raw(CIString("Operation-Id"),operationId),
@@ -189,15 +185,11 @@ object ActiveReplication {
               )
 //              *> IO.sleep(ctx.config.delayReplicaMs milliseconds)
             }.compile.drain
-//            responses <- uploadRequests.traverse{request =>
-//              ctx.client.status(request)
-//            }
             res <- NoContent()
           } yield res
           case None => NotFound()
         }
-
-        _ <- ctx.logger.debug(res.toString)
+        _              <- ctx.logger.debug(res.toString)
       } yield res
   }
 }

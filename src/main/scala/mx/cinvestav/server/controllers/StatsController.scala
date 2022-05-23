@@ -5,7 +5,7 @@ import cats.effect.IO
 import mx.cinvestav.Declarations.NodeContext
 import mx.cinvestav.commons.events.EventXOps
 import mx.cinvestav.events.Events
-import mx.cinvestav.Declarations.Implicits.{iObjectEncoder}
+import mx.cinvestav.Declarations.Implicits.{iObjectEncoder, objectDEncoder}
 import mx.cinvestav.Helpers
 //
 import org.http4s.HttpRoutes
@@ -65,16 +65,17 @@ object StatsController {
           "nodeId" -> nodeId.asJson,
           "ipAddress"-> currentState.ip.asJson,
           "port" -> ctx.config.port.asJson,
-          "cachePolicy" -> ctx.config.cachePolicy.asJson,
+//          "cachePolicy" -> ctx.config.cachePolicy.asJson,
           "totalStorageCapacity" -> totalCapacity.asJson,
           "usedStorageCapacity" -> usedCapacity.asJson,
           "availableStorageCapacity" -> availableCapacity.asJson,
 //          "usedStorageCapacityPercentage" -> (usedCapacity/totalCapacity).asJson,
-          "timestamp" -> timestamp.asJson,
-          "objects" -> os.map(x=>x.asJson(iObjectEncoder)).asJson,
-          "putsQueueTimes" -> putsQueueTimes.asJson,
-          "getsQueueTimes" -> getsQueueTimes.asJson,
-          "globalQueueTimes" -> globalQueueTimes.asJson,
+//          "timestamp" -> timestamp.asJson,
+          "metadata" -> currentState.metadata.map(x=>x._1-> x._2.asJson(objectDEncoder)).asJson
+//            os.map(x=>x.asJson(iObjectEncoder)).asJson,
+//          "putsQueueTimes" -> putsQueueTimes.asJson,
+//          "getsQueueTimes" -> getsQueueTimes.asJson,
+//          "globalQueueTimes" -> globalQueueTimes.asJson,
 //          "hitVec" -> hitVec.asJson
         ).asJson
         response <- Ok(payloadRes)

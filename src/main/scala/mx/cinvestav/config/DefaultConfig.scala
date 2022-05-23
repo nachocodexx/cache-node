@@ -3,6 +3,7 @@ package mx.cinvestav.config
 //
 import scala.concurrent.ExecutionContext.global
 import cats.effect._
+import mx.cinvestav.commons.types.UploadHeaders
 
 import java.net.InetAddress
 //
@@ -111,10 +112,10 @@ case class Pool(hostname:String,port:Int) {
     //    _                  <- finalizer
   }  yield ()
 
-  def uploadCompleted(operationId:String,objectId:String,blockIndex:Int)(implicit ctx:NodeContext) = {
+  def uploadCompleted(uphs:UploadHeaders)(implicit ctx:NodeContext) = {
     val req = Request[IO](
       method = Method.POST,
-      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = operationId, objectId = objectId,blockIndex=blockIndex)),
+      uri = Uri.unsafeFromString(uploadCompletedURI(operationId = uphs.operationId, objectId = uphs.objectId,blockIndex=uphs.blockIndex)),
       headers = Headers(
         Header.Raw(CIString("Node-Id"),ctx.config.nodeId)
       )

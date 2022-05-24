@@ -12,7 +12,7 @@ import mx.cinvestav.commons.events
 import mx.cinvestav.commons.events.{Del, Get, Push, Put}
 import mx.cinvestav.commons.types.{ObjectLocation, ObjectMetadata}
 import mx.cinvestav.events.Events
-import mx.cinvestav.server.controllers.{ActiveReplication, EventsController, HitCounterController, InfoRoutes, PullController, ReplicateController, ResetController, StatsController}
+import mx.cinvestav.server.controllers.{ActiveReplication, EventsController, HitCounterController, PullController, ReplicateController, ResetController, StatsController}
 import mx.cinvestav.server.middlewares.AuthMiddlewareX
 import org.http4s.multipart.Part
 
@@ -48,7 +48,7 @@ import org.http4s.{headers=>HEADERS}
 class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
   def apiBaseRouteName = s"/api/v${ctx.config.apiVersion}"
 
-  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController() <+> InfoRoutes() <+> HitCounterController() <+> ActiveReplication()
+  def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController()  <+> HitCounterController() <+> ActiveReplication()
 //    ReplicateController(dSemaphore) <+>
 
   private def httpApp: Kleisli[IO, Request[IO],

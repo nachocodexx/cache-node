@@ -112,6 +112,18 @@ case class Pool(hostname:String,port:Int) {
     //    _                  <- finalizer
   }  yield ()
 
+
+  def uploadCompletedv2(objectIds:List[String])(implicit ctx:NodeContext) = {
+    val objectIdsHs = Headers(objectIds.map(oId => Header.Raw(CIString("Object-Id"),oId)))
+    val req         = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(s"http://$hostname:$port/api/v3/upload/completed"),
+      headers = Headers(
+        Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+      ) ++ objectIdsHs
+    )
+    ctx.client.status(req = req)
+  }
   def uploadCompleted(uphs:UploadHeaders)(implicit ctx:NodeContext) = {
     val req = Request[IO](
       method = Method.POST,

@@ -9,7 +9,7 @@ import cats.effect.std.Semaphore
 import mx.cinvestav.Declarations.{IObject, ObjectD, UploadHeadersOps}
 import mx.cinvestav.Helpers
 import mx.cinvestav.commons.events.{EventXOps, ObjectHashing, PutCompleted}
-import mx.cinvestav.commons.types.{ObjectMetadata, ReplicationProcess, ReplicationProcessV2, UploadHeaders}
+import mx.cinvestav.commons.types.{ObjectMetadata, ReplicationProcess, UploadHeaders}
 import org.http4s.{AuthedRequest, Method, Request, Response, Uri}
 
 import java.nio.file.Paths
@@ -208,57 +208,60 @@ object UploadController {
 
 
     } yield responses
-  def apply(downloadSemaphore:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
+
+  def downloadIfPivotNode(uphs:UploadHeaders,value:ReplicationProcess)(implicit ctx:NodeContext) = {
+    if(uphs.pivotReplicaNode == ctx.config.nodeId) value.what.traverse{ f =>
+      val downloadReq = Request[IO](
+        method = Method.GET,
+        uri = Uri.unsafeFromString(f.url)
+      )
+
+      val response = ctx.client.stream(downloadReq).flatMap{
+        res=>
+          val path = Paths.get(s"${ctx.config.storagePath}/${f.id}")
+          val s = res.body.through(Files[IO].writeAll(path = path))
+          if(path.toFile.exists()) Stream.empty else s
+      }
+      response.compile.drain
+    }.void else IO.unit
+  }
+  def apply(s:Semaphore[IO])(implicit ctx:NodeContext): AuthedRoutes[User, IO] = {
 
     AuthedRoutes.of[User,IO]{
       case authReq@POST -> Root / "data" as user => for {
         _          <- ctx.logger.debug("DATA_WRITE")
         req        = authReq.req
         multipart  <- req.as[Multipart[IO]]
-        _          <- multipart.parts.traverse{ part =>
+        objectIds  <- multipart.parts.traverse{ part =>
           val name    = part.name.getOrElse(s"${UUID.randomUUID().toString}")
           val body    = part.body
           val headers = part.headers
           val path    = Paths.get(s"${ctx.config.storagePath}/$name")
-          body.through(Files[IO].writeAll(path = path)).compile.drain
+          body.through(Files[IO].writeAll(path = path)).compile.drain *> name.pure[IO]
         }
+        _       <- ctx.config.pool.uploadCompletedv2(objectIds = objectIds.toList).start
         res     <- NoContent()
       } yield res
+//      objectId -> snId
       case authReq@POST -> Root / "upload" as user =>
         val defaultConv = (x:FiniteDuration) => x.toNanos
         val program = for {
           serviceTimeStart     <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
           serviceTimeStartReal <- IO.realTime.map(_.toNanos)
-
           //     ________________________________________________________________
           req                     = authReq.req
           headers                 = req.headers
           uphs                    <- UploadHeadersOps.fromHeaders(headers=headers)
           payload                 <- req.as[Map[String,ReplicationProcess]].onError(e=> ctx.logger.error(e.getMessage))
-//          _ <- ctx.logger.debug(s"${payload}")
           maybeReplicationProcess = payload.get(ctx.config.nodeId)
           response                <- maybeReplicationProcess match {
             case Some(value) =>  for {
               _            <- IO.unit
-              _            <- if(uphs.pivotReplicaNode == ctx.config.nodeId) value.what.traverse{ f =>
-                val downloadReq = Request[IO](
-                  method = Method.GET,
-                  uri = Uri.unsafeFromString(f.url)
-                )
-                val response = ctx.client.stream(downloadReq).flatMap{
-                  res=>
-                    val path = Paths.get(s"${ctx.config.storagePath}/${f.id}")
-                    val s = res.body.through(Files[IO].writeAll(path = path))
-                    if(path.toFile.exists()) Stream.empty else s
-                }
-
-                response.compile.drain
-//                *> ctx.logger.debug(s"${f.id} written successfully")
-              }.void else IO.unit
-//            __________________________________________________________________________________________________________
+              _            <- downloadIfPivotNode(uphs = uphs, value= value)
+              //            __________________________________________________________________________________________________________
               replicaNodes = value.where
               _ <- ctx.logger.debug(s"REPLICA_NODES $replicaNodes")
-//            __________________________________________________________________________________________________________
+              //            __________________________________________________________________________________________________________
               _  <- ctx.state.update{
                 s=>
                   val newMetadata = value.what.map{w=>
@@ -268,13 +271,20 @@ object UploadController {
                 s.copy(metadata = s.metadata ++ newMetadata )
               }
 
-               uploadRequest = replicaNodes.map { id =>
-                val r0 = Request[IO](method = Method.POST, uri = Uri.unsafeFromString(s"http://$id:6666/api/v2/upload"))
-                  .withEntity(payload)
-                val parts = value.what.map{ w =>
+              uploadRequests = replicaNodes.map { id =>
+                val r0     = Request[IO](method = Method.POST, uri = Uri.unsafeFromString(s"http://$id:6666/api/v2/upload")).withEntity(payload)
+//              ____________________________________________________________________________________
+                val parts  = value.what.map{ w =>
                   val file = Paths.get(s"${ctx.config.storagePath}/${w.id}").toFile
-                  Part.fileData[IO](name = w.id,file = file,headers = Headers.empty )
+
+                  Part.fileData[IO](
+                    name    = w.id,
+                    file    = file,
+                    headers = Headers(Header.Raw(CIString("Object-Id"),w.id))
+                  )
+
                 }.toVector
+//              ____________________________________________________________________________________
                 val multipart = Multipart[IO](parts = parts)
                 val r1 = Request[IO](
                   method  = Method.POST,
@@ -285,10 +295,10 @@ object UploadController {
                   .withHeaders(multipart.headers)
                 (r0,r1)
               }
-//             _________________________________________________________________________________________________________
+              //             _________________________________________________________________________________________________________
               pushReplicasAndData = for {
                   _ <- IO.unit
-                  x <- uploadRequest.traverse{
+                  x <- uploadRequests.traverse{
                     case (upReq,dataReq)  =>
                       ctx.client.status(dataReq).flatMap(s=> ctx.logger.debug(s"DATA_STATUS $s")) *> ctx.client.status(upReq).flatMap(s=> ctx.logger.debug(s"UPLOAD_STATUS $s"))
                   }
@@ -311,53 +321,6 @@ object UploadController {
             case None => NoContent()
           }
           _ <- ctx.logger.debug(s"RESPONSE $response")
-
-          //          _                    <- ctx.logger.debug(payload.toString())
-          //          headers              = req.headers
-          //          uphs                 <- UploadHeadersOps.fromHeaders(headers=headers)
-          //          replicaNodes         = uphs.replicaNodes
-          //          _                    <- (IO.sleep(ctx.config.delayReplicaMs milliseconds) *> ctx.config.pool.uploadCompleted(uphs)).start
-
-          //          latency              = serviceTimeStartReal - uphs.requestStartAt
-          //          _                    <- ctx.logger.debug(s"REAL_ARRIVAL_TIME ${uphs.objectId}, $serviceTimeStart")
-          //          _                    <- ctx.logger.debug(s"SERVICE_TIME_START ${uphs.objectId} $serviceTimeStart")
-          //          //      ___________________________________________________________________________________________
-          //          maybeResponse        <- controller(uphs)(authReq)
-          //          response             <- maybeResponse match {
-          //          case Left(value) =>  value.pure[IO]
-          //          case Right(value) =>
-          //            val x = for {
-          //             _                <- IO.unit
-          //             //      ____________________________________________________________
-          //             serviceTimeEnd   <- IO.monotonic.map(defaultConv).map(_ - ctx.initTime)
-          //             _                <- ctx.logger.debug(s"SERVICE_TIME_END ${uphs.objectId} $serviceTimeEnd")
-          //             //      ____________________________________________________________
-          //             serviceTime      = serviceTimeEnd - serviceTimeStart
-          //             _                <- ctx.logger.debug(s"SERVICE_TIME ${uphs.objectId} $serviceTime")
-          //             //      ______________________________________________________________________________________
-          //             response         = value.putHeaders(
-          //               Headers(
-          //                 Header.Raw(CIString("Latency"),latency.toString ),
-          //                 Header.Raw(CIString("Service-Time"),serviceTime.toString),
-          //                 Header.Raw(CIString("Service-Time-Start"), serviceTimeStart.toString),
-          //                 Header.Raw(CIString("Service-Time-End"), serviceTimeEnd.toString),
-          //               )
-          //             )
-          //             now                <- IO.realTime.map(defaultConv)
-          //             put                = Put.fromUploadHeaders(nodeId = ctx.config.nodeId,userId = user.id,timestamp = now,serviceTimeStart, serviceTimeEnd, uphs)
-          //             _                  <- Events.saveEvents(events =  put :: Nil)
-          //             _                  <- ctx.logger.info(s"PUT ${uphs.operationId} ${uphs.objectId} ${uphs.objectSize} $serviceTimeStart $serviceTimeEnd $serviceTime")
-          //             _                  <- ctx.logger.debug("____________________________________________________")
-          //             _                  <- IO.sleep(ctx.config.delayReplicaMs milliseconds)  *> (ctx.config.pool.uploadCompleted(uphs).flatMap{ status=>
-          //               ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status") *> (if(status.code== 204) for{
-          //                 timestamp <- IO.realTime.map(_.toNanos)
-          //                 _ <- Events.saveEvents(events = PutCompleted.fromPut(put,timestamp)::Nil)
-          //               } yield ()
-          //               else IO.unit)
-          //             }).start
-          //         } yield response
-          //            x
-          //        }
       } yield response
 
         program.onError{ e=>
@@ -367,43 +330,3 @@ object UploadController {
   }
 
 }
-
-//                  else for {
-//                    _ <- IO.unit
-//                    status  <- ctx.config.cachePool.upload(
-//                      objectId = evictedObjectId,
-//                      bytes    = evictedObjectBytes,
-//                      userId   = user.id,
-//                      operationId =  operationId,
-//                      contentType = evictedContentType
-//                    ).onError{ t=>
-//                      ctx.errorLogger.error(t.getMessage)
-//                    }
-//                    _ <- ctx.logger.debug(s"EVICTED_CACHE_POOL_STATUS$status")
-//                  } yield ()
-//                  pushEventsFiber        <-
-//                DELETE EVICTED OBJECT FROM CACHE
-//              beforeHashNanos <- IO.monotonic.map(_.toNanos)
-//              x               <- SecureX.sha512AndHex(bytesBuffer).flatMap{ hash=>
-//                for {
-//                  hashServiceTime <- IO.monotonic.map(_.toNanos).map(_ - beforeHashNanos)
-//                  hashNow         <- IO.realTime.map(_.toMillis)
-//                  _ <- ctx.logger.info(s"HASH $guid $hash $hashServiceTime $operationId")
-//                  _ <- Events.saveEvents(
-//                    events = List(
-//                      ObjectHashing(
-//                        serialNumber = 0,
-//                        nodeId = ctx.config.nodeId,
-//                        objectId = guid,
-//                        checksum = hash,
-//                        serviceTimeNanos = hashServiceTime,
-//                        timestamp = hashNow,
-//                        monotonicTimestamp = 0,
-//                        correlationId = operationId,
-//                        algorithm = "SHA512"
-//                      )
-//                    )
-//                  )
-//                } yield ()
-//              }.start
-//              rawBytesLen  = bytesBuffer.length

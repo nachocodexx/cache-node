@@ -290,7 +290,9 @@ case class ServiceReplicator(hostname:String,port:Int){
     val request =  Request[IO](
       method = Method.POST,
       uri    = uri,
-      headers = Headers.empty
+      headers = Headers(
+        Header.Raw(CIString("Node-Index"),ctx.config.nodeIndex.toString)
+      )
     )
     ctx.client.status(request)
   }
@@ -325,6 +327,7 @@ case class DefaultConfigV5(
                             maxTotalConnections:Int,
                             idleTimeout:Long,
                             bufferSize:Int,
-                            delayReplicaMs:Long
+                            delayReplicaMs:Long,
+                            nodeIndex:Int
                         )
 

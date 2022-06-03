@@ -215,13 +215,13 @@ object UploadController {
         method = Method.GET,
         uri = Uri.unsafeFromString(f.url)
       )
-
-      val response = ctx.client.stream(downloadReq).flatMap{
-        res=>
-          val path = Paths.get(s"${ctx.config.storagePath}/${f.id}")
-          val s = res.body.through(Files[IO].writeAll(path = path))
-          if(path.toFile.exists()) Stream.empty else s
+      val path = Paths.get(s"${ctx.config.storagePath}/${f.id}")
+      val response = if(path.toFile.exists()) Stream.empty else {
+        ctx.client.stream(req = downloadReq).flatMap{ res =>
+          res.body.through(Files[IO].writeAll(path = path))
+        }
       }
+
       response.compile.drain
     }.void else IO.unit
   }
@@ -254,6 +254,8 @@ object UploadController {
           uphs                    <- UploadHeadersOps.fromHeaders(headers=headers)
           payload                 <- req.as[Map[String,ReplicationProcess]].onError(e=> ctx.logger.error(e.getMessage))
           maybeReplicationProcess = payload.get(ctx.config.nodeId)
+
+
           response                <- maybeReplicationProcess match {
             case Some(value) =>  for {
               _            <- IO.unit

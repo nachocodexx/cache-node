@@ -58,17 +58,13 @@ object Main extends IOApp{
           _initState      = NodeStateV6(
             levelId               = if(config.level==0) "LOCAL" else "SYNC",
             status                = status.Up,
-//            cacheNodes            = config.cacheNodes,
             ip                    = InetAddress.getLocalHost.getHostAddress,
-//            availableResources    = config.cacheNodes.length,
             cache                 =  cache,
-//            currentEntries        =  currentEntries,
             cacheSize             = config.cacheSize,
-//            queue                 = queue,
-//            cacheX                = if(config.cachePolicy=="LRU") LRU[IO,ObjectS](config.cacheSize) else LFU[IO,ObjectS](config.cacheSize),
             dropboxClient         =  dbxClient,
             s                     = semaphore,
-            experimentId          =  config.experimentId
+            experimentId          =  config.experimentId,
+            currentOperation      =  0
           )
           state           <- IO.ref(_initState)
           //        __________________________________________________________________________

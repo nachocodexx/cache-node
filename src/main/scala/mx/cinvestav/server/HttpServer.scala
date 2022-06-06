@@ -55,7 +55,7 @@ class HttpServer(s:Semaphore[IO])(implicit ctx:NodeContext){
   private def httpApp: Kleisli[IO, Request[IO],
     Response[IO]] = Router[IO](
     "/api/v3"-> v3Routes,
-    s"$apiBaseRouteName" -> baseRoutes,,
+    s"$apiBaseRouteName" -> baseRoutes,
 //    s"$apiBaseRouteName" -> AuthMiddlewareX(ctx=ctx)(RouteV6(s)),
     "/pull" -> PullController(),
     ).orNotFound

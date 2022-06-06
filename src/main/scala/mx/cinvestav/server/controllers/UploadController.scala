@@ -239,10 +239,12 @@ object UploadController {
           val path    = Paths.get(s"${ctx.config.storagePath}/$name")
           body.through(Files[IO].writeAll(path = path)).compile.drain *> name.pure[IO]
         }
-        _       <- ctx.config.pool.uploadCompletedv2(objectIds = objectIds.toList).start
+//        _       <- ctx.config.pool.uploadCompletedv2(objectIds = objectIds.toList).start
         res     <- NoContent()
       } yield res
 //      objectId -> snId
+
+//      case authReq@POST -> Root / "upload" as user =>
       case authReq@POST -> Root / "upload" as user =>
         val defaultConv = (x:FiniteDuration) => x.toNanos
         val program = for {

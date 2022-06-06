@@ -12,7 +12,7 @@ import mx.cinvestav.commons.events
 import mx.cinvestav.commons.events.{Del, Get, Push, Put}
 import mx.cinvestav.commons.types.{ObjectLocation, ObjectMetadata}
 import mx.cinvestav.events.Events
-import mx.cinvestav.server.controllers.{ActiveReplication, EventsController, HitCounterController, PullController, ReplicateController, ResetController, StatsController}
+import mx.cinvestav.server.controllers.{ActiveReplication, DownloadV3, EventsController, HitCounterController, PullController, ReplicateController, ResetController, StatsController, UploadV3}
 import mx.cinvestav.server.middlewares.AuthMiddlewareX
 import org.http4s.multipart.Part
 
@@ -45,17 +45,19 @@ import language.postfixOps
 import org.http4s.{headers=>HEADERS}
 //
 
-class HttpServer(dSemaphore:Semaphore[IO])(implicit ctx:NodeContext){
+class HttpServer(s:Semaphore[IO])(implicit ctx:NodeContext){
   def apiBaseRouteName = s"/api/v${ctx.config.apiVersion}"
 
   def baseRoutes: Kleisli[OptionT[IO, *], Request[IO], Response[IO]] = StatsController() <+> ResetController() <+> EventsController()  <+> HitCounterController() <+> ActiveReplication()
 //    ReplicateController(dSemaphore) <+>
+  def v3Routes = UploadV3(s) <+> DownloadV3(s = s)
 
   private def httpApp: Kleisli[IO, Request[IO],
     Response[IO]] = Router[IO](
-    s"$apiBaseRouteName" -> AuthMiddlewareX(ctx=ctx)(RouteV6(dSemaphore)),
+    "/api/v3"-> v3Routes,
+    s"$apiBaseRouteName" -> baseRoutes,,
+//    s"$apiBaseRouteName" -> AuthMiddlewareX(ctx=ctx)(RouteV6(s)),
     "/pull" -> PullController(),
-    s"$apiBaseRouteName" -> baseRoutes,
     ).orNotFound
   def run()(implicit ctx:NodeContext): IO[Unit] = for {
     _ <- ctx.logger.debug(s"HTTP SERVER AT ${ctx.config.host}:${ctx.config.port}")

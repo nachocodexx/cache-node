@@ -11,7 +11,8 @@ import org.http4s.client.Client
 
 import java.nio.file.Path
 import mx.cinvestav.commons.events.{EventX, Get, Put}
-import mx.cinvestav.commons.types.UploadHeaders
+import mx.cinvestav.commons.types
+import mx.cinvestav.commons.types.{CompletedOperation, UploadHeaders}
 import org.http4s.Headers
 import org.typelevel.ci.CIString
 //
@@ -33,7 +34,15 @@ import io.circe.syntax._
 
 object Declarations {
   //
+   case class Ball(id:String,size:Long,metadata:Map[String,String]=Map.empty[String,String])
+
+
   object Implicits {
+    implicit val completedOperationsEncoder:Encoder[CompletedOperation] = {
+      case dc: types.DownloadCompleted => dc.asJson
+      case uc: types.UploadCompleted => uc.asJson
+      case _ => Json.Null
+    }
     implicit val eventXEncoder: Encoder[EventX] = {
       case put:Put => put.asJson
       case get:Get => get.asJson
@@ -203,6 +212,8 @@ object Declarations {
                           status:Status,
                           ip:String = "127.0.0.1",
                           totalStorageSpace:Long=1000000000,
+                          balls:List[Ball]=Nil,
+                          completedOperations:List[CompletedOperation]=Nil,
                           cache: MemoryCache[IO,String,IObject],
                           cacheSize:Int,
                           downloadCounter:Int=0,
@@ -210,7 +221,8 @@ object Declarations {
                           events:List[EventX] =Nil,
                           s:Semaphore[IO],
                           experimentId:String,
-                          metadata:Map[String,ObjectD] = Map.empty[String,ObjectD]
+                          metadata:Map[String,ObjectD] = Map.empty[String,ObjectD],
+                          currentOperation:Int
                         )
 
   object UploadHeadersOps {

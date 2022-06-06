@@ -113,17 +113,34 @@ case class Pool(hostname:String,port:Int) {
   }  yield ()
 
 
-  def uploadCompletedv2(objectIds:List[String])(implicit ctx:NodeContext) = {
+  def uploadCompletedv2(objectIds:List[String],operationId:String)(implicit ctx:NodeContext) = {
     val objectIdsHs = Headers(objectIds.map(oId => Header.Raw(CIString("Object-Id"),oId)))
     val req         = Request[IO](
       method = Method.POST,
       uri = Uri.unsafeFromString(s"http://$hostname:$port/api/v3/upload/completed"),
       headers = Headers(
         Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+        Header.Raw(CIString("Operation-Id"),operationId)
       ) ++ objectIdsHs
     )
-    ctx.client.status(req = req)
+    ctx.client.status(req = req).flatTap(status=>ctx.logger.debug(s"UPLOAD_COMPLETED_STATUS $status"))
   }
+
+  def downloadCompletedv2(objectId:String,operationId:String)(implicit ctx:NodeContext) = {
+    val req         = Request[IO](
+      method = Method.POST,
+      uri = Uri.unsafeFromString(s"http://$hostname:$port/api/v3/download/completed"),
+      headers = Headers(
+        Header.Raw(CIString("Node-Id"),ctx.config.nodeId),
+        Header.Raw(CIString("Object-Id"),objectId),
+        Header.Raw(CIString("Operation-Id"),operationId)
+      )
+    )
+    ctx.client.status(req = req).flatTap(status=>ctx.logger.debug(s"DOWNLOAD_COMPLETED_STATUS $status"))
+  }
+
+
+
   def uploadCompleted(uphs:UploadHeaders)(implicit ctx:NodeContext) = {
     val req = Request[IO](
       method = Method.POST,

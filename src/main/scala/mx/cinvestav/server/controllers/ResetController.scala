@@ -37,7 +37,8 @@ object ResetController {
       _            <- ctx.state.update{ s=>
         s.copy(
           events  = Nil,
-
+          completedOperations =  Nil,
+          balls = Nil
         )
       }
       res          <- NoContent()

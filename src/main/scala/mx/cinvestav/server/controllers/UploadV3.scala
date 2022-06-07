@@ -96,13 +96,14 @@ object UploadV3 {
 
         response <- appIO .handleErrorWith{ e=>
           for {
-            _            <- IO.unit
+            _            <- ctx.logger.error(e.getMessage)
+            _            <- ctx.logger.debug(s"PULL_DATA $objectUri")
             response     <- if(path.toFile.exists()) Forbidden(s"Ball $objectId already exists")
             else {
               for {
                 _             <- IO.unit
                 ball          = Ball(id = objectId,size = objectSize,metadata =Map("PATH"->path.toString))
-                _             <- downloadFromURI(objectId = objectId, objectUri = objectUri) .compile.drain
+                _             <- downloadFromURI(objectId = objectId, objectUri = objectUri).compile.drain
                 _             <- IO.sleep(ctx.config.delayReplicaMs milliseconds)
                 _             <- ctx.state.update{ s=>s.copy(balls = s.balls :+ ball)}
                 departureTime <- IO.monotonic.map(_.toNanos)

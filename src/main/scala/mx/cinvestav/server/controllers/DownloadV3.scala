@@ -58,6 +58,8 @@ object DownloadV3 {
       )}
       _             <- s.release
       _             <- ctx.config.pool.downloadCompletedv2(objectId = ballId,operationId = operationId).start
+      _             <- ctx.logger.debug(s"DOWNLOAD $operationId $ballId")
+      _                  <- ctx.logger.debug("_____________________________________________")
     } yield response
   }
 

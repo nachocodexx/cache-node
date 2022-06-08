@@ -104,6 +104,9 @@ object UploadV3 {
                 _             <- IO.unit
                 ball          = Ball(id = objectId,size = objectSize,metadata =Map("PATH"->path.toString))
                 _             <- downloadFromURI(objectId = objectId, objectUri = objectUri).compile.drain
+                  .onError{ e=>
+                    ctx.logger.error(e.getMessage)
+                  }
                 _             <- IO.sleep(ctx.config.delayReplicaMs milliseconds)
                 _             <- ctx.state.update{ s=>s.copy(balls = s.balls :+ ball)}
                 departureTime <- IO.monotonic.map(_.toNanos)
@@ -128,6 +131,7 @@ object UploadV3 {
           } yield response
       }
         _ <- s.release
+        _                  <- ctx.logger.debug("_____________________________________________")
       } yield response
 
   }

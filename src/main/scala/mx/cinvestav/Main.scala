@@ -53,7 +53,7 @@ object Main extends IOApp{
 
            dbxConfig = DbxRequestConfig.newBuilder("cinvestav-cloud-test/1.0.0").build
            dbxClient = new DbxClientV2(dbxConfig, config.dropboxAccessToken)
-           semaphore <- Semaphore[IO](1)
+//           semaphore <- Semaphore[IO](1)
           dSemaphore <- Semaphore[IO](1)
           _initState      = NodeStateV6(
             levelId               = if(config.level==0) "LOCAL" else "SYNC",
@@ -62,7 +62,7 @@ object Main extends IOApp{
             cache                 =  cache,
             cacheSize             = config.cacheSize,
             dropboxClient         =  dbxClient,
-            s                     = semaphore,
+//            s                     = semaphore,
             experimentId          =  config.experimentId,
             currentOperation      =  0
           )

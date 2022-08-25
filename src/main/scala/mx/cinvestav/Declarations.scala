@@ -219,7 +219,7 @@ object Declarations {
                           downloadCounter:Int=0,
                           dropboxClient:DbxClientV2,
                           events:List[EventX] =Nil,
-                          s:Semaphore[IO],
+//                          s:Semaphore[IO],
                           experimentId:String,
                           metadata:Map[String,ObjectD] = Map.empty[String,ObjectD],
                           currentOperation:Int

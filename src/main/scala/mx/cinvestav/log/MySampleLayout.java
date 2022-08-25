@@ -21,18 +21,13 @@ public class MySampleLayout extends LayoutBase<ILoggingEvent> {
             String level = event.getLevel().toString();
             String loggerName = event.getLoggerName();
             String message = event.getFormattedMessage();
-//            sbuf.append(elapsedTime);
-//            sbuf
-////                    .append(String.join(",",message.split(" ")))
-//                    .append(message)
-//                    .append(" ")
-//                    .append(nodeId)
-//                    .append(" ")
-//                    .append(elapsedTime)
-//                    .append(CoreConstants.LINE_SEPARATOR);
 
             sbuf
                     .append(elapsedTime)
+                    .append(" ")
+                    .append(level)
+                    .append(" ")
+                    .append(threadName)
                     .append(" ")
                     .append(nodeId)
                     .append(" ")
